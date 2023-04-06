@@ -1,0 +1,57 @@
+# Phase
+
+
+## Properties
+Name | Type | Description | Notes
+------------ | ------------- | ------------- | -------------
+**id** | **str** |  | [optional] 
+**type** | **str** |  | [optional] 
+**locked** | **bool** |  | [optional] 
+**title** | **str** |  | [optional] 
+**description** | **str** |  | [optional] 
+**owner** | **str** |  | [optional] 
+**scheduled_start_date** | **datetime** |  | [optional] 
+**due_date** | **datetime** |  | [optional] 
+**start_date** | **datetime** |  | [optional] 
+**end_date** | **datetime** |  | [optional] 
+**planned_duration** | **int** |  | [optional] 
+**flag_status** | [**FlagStatus**](FlagStatus.md) |  | [optional] 
+**flag_comment** | **str** |  | [optional] 
+**overdue_notified** | **bool** |  | [optional] 
+**flagged** | **bool** |  | [optional] 
+**start_or_scheduled_date** | **datetime** |  | [optional] 
+**end_or_due_date** | **datetime** |  | [optional] 
+**overdue** | **bool** |  | [optional] 
+**or_calculate_due_date** | **str, none_type** |  | [optional] 
+**computed_planned_duration** | **{str: (bool, date, datetime, dict, float, int, list, str, none_type)}** |  | [optional] 
+**actual_duration** | **{str: (bool, date, datetime, dict, float, int, list, str, none_type)}** |  | [optional] 
+**release_uid** | **int** |  | [optional] 
+**tasks** | [**[Task]**](Task.md) |  | [optional] 
+**release** | **bool, date, datetime, dict, float, int, list, str, none_type** |  | [optional] 
+**status** | [**PhaseStatus**](PhaseStatus.md) |  | [optional] 
+**color** | **str** |  | [optional] 
+**origin_id** | **str** |  | [optional] 
+**current_task** | [**Task**](Task.md) |  | [optional] 
+**display_path** | **str** |  | [optional] 
+**active** | **bool** |  | [optional] 
+**done** | **bool** |  | [optional] 
+**defunct** | **bool** |  | [optional] 
+**updatable** | **bool** |  | [optional] 
+**aborted** | **bool** |  | [optional] 
+**planned** | **bool** |  | [optional] 
+**failed** | **bool** |  | [optional] 
+**failing** | **bool** |  | [optional] 
+**release_owner** | **str** |  | [optional] 
+**all_gates** | [**[GateTask]**](GateTask.md) |  | [optional] 
+**all_tasks** | [**[Task]**](Task.md) |  | [optional] 
+**children** | [**[PlanItem]**](PlanItem.md) |  | [optional] 
+**variable_usages** | [**[UsagePoint]**](UsagePoint.md) |  | [optional] 
+**original** | **bool** |  | [optional] 
+**phase_copied** | **bool** |  | [optional] 
+**ancestor_id** | **str** |  | [optional] 
+**latest_copy** | **bool** |  | [optional] 
+**any string name** | **bool, date, datetime, dict, float, int, list, str, none_type** | any string name can be used but the value must be the correct type | [optional]
+
+[[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)
+
+

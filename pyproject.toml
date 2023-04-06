@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+exclude = [
+  "digitalai/release/v1/docs/*"
+]
+
+[project]
+name = "digitalai_release_sdk"
+version = "0.0.17"
+authors = [
+  { name="Digital.ai", email="" },
+]
+description = "Digital.ai Release SDK"
+readme = "README_PYPI.md"
+requires-python = ">=3.7"
+dependencies = [
+    'dataclasses-json==0.5.7',
+    'pycryptodomex==3.16.0',
+    'python_dateutil >= 2.5.3',
+    'urllib3 >= 1.25.3'
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+"Homepage" = "https://digital.ai/"
+"Bug Tracker" = "https://digital.ai/"
+
+
