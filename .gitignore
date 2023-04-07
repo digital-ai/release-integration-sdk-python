@@ -7,6 +7,7 @@ __pycache__/
 
 # Venv
 .venv/
+venv
 
 # System
 .DS_Store
@@ -14,6 +15,7 @@ __pycache__/
 # Pip
 *.egg-info
 dist/
+requirements.txt
 
 # Testing
 .pytest_cache/
