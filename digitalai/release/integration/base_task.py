@@ -25,6 +25,7 @@ class BaseTask(ABC):
         is raised, the task's exit code is also set to 1.
         """
         try:
+            self.output_context = OutputContext(0, "", {}, [])
             self.execute()
         except AbortException:
             logger.debug("Abort requested")

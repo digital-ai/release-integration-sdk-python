@@ -137,7 +137,6 @@ if __name__ == "__main__":
         module = importlib.import_module(class_file_name[:-3])
         task_class = getattr(module, task_class_name)
         task_obj = task_class()
-        task_obj.output_context = OutputContext(0, "", {}, [])
         task_obj.input_properties = task_props
         task_obj.release_server_url = release_server_url.strip('/')
         task_obj.release_context = input_context.release

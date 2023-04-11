@@ -9,7 +9,7 @@ exclude = [
 
 [project]
 name = "digitalai_release_sdk"
-version = "0.0.17"
+version = "0.0.18"
 authors = [
   { name="Digital.ai", email="" },
 ]
