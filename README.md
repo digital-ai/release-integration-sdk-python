@@ -1,27 +1,38 @@
-# release-integration-sdk-python
+# Digital.ai Release SDK
 
-This project serves as an SDK for developing a Python-based container plugin. 
-Additionally, it furnishes Release connection, Release API classes, and functions.  
+The Digital.ai Release Python SDK (digitalai-release-sdk) is a set of tools that developers can use to create container-based tasks.  
 
-### Execute and test with input.json
+Developers can use the `BaseTask` abstract class as a starting point to define their custom tasks and take advantage of the other methods and attributes provided by the SDK to interact with the task execution environment.
 
-Unix/macOS
+## Installation
 
-    cd tests/release/container
-    python3 -m unittest test_wrapper.py
+```shell script
+pip install digitalai-release-sdk
+```
+## Task Example: hello.py
 
-Windows
+```python
+from digitalai.release.integration import BaseTask
+
+class Hello(BaseTask):
     
-    cd tests\release\container
-    py -m unittest test_wrapper.py
+    def execute(self) -> None:
 
-## The SDK is available for testing at test.pypi.org
+        # Get the name from the input
+        name = self.input_properties['yourName']
+        if not name:
+            raise ValueError("The 'yourName' field cannot be empty")
 
-https://test.pypi.org/project/digitalai-release-sdk
+        # Create greeting
+        greeting = f"Hello {name}"
 
-## Reference container project that use the SDK
+        # Add greeting to the task's comment section in the UI
+        self.add_comment(greeting)
 
-https://github.com/digital-ai/release-integration-template-python
+        # Put greeting in the output of the task
+        self.set_output_property('greeting', greeting)
 
+ ```
 
-
+## Documentation
+Read more about Digital.ai Release Python SDK [here](https://digital.ai/)

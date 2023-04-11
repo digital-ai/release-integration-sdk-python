@@ -9,12 +9,12 @@ exclude = [
 
 [project]
 name = "digitalai_release_sdk"
-version = "0.0.18"
+version = "0.0.19"
 authors = [
-  { name="Digital.ai", email="" },
+  { name="Digital.ai", email="pypi-devops@digital.ai" },
 ]
 description = "Digital.ai Release SDK"
-readme = "README_PYPI.md"
+readme = "README.md"
 requires-python = ">=3.7"
 dependencies = [
     'dataclasses-json==0.5.7',
@@ -30,6 +30,5 @@ classifiers = [
 
 [project.urls]
 "Homepage" = "https://digital.ai/"
-"Bug Tracker" = "https://digital.ai/"
 
 
