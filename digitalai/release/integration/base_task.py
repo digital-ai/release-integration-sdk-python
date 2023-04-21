@@ -127,7 +127,7 @@ class BaseTask(ABC):
         Returns an ApiClient object with default configuration based on the task.
         """
         if not all([self.get_release_server_url(), self.get_task_user().username, self.get_task_user().password]):
-            raise ValueError("Cannot create reach Release API without server URL, username, or password. "
+            raise ValueError("Cannot connect to Release API without server URL, username, or password. "
                              "Make sure that the 'Run as user' property is set on the release.")
 
         configuration = Configuration(
