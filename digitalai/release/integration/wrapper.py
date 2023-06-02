@@ -124,17 +124,17 @@ if __name__ == "__main__":
         task_props, task_type = get_task_details()
         task_class_name = task_type.split(".")[1]
         class_file_name = ''
-        for filename in os.listdir(os.getcwd()):
+        for filename in os.listdir(os.getcwd() + "/src"):
             if filename.endswith('.py'):
-                with open(filename) as file:
+                with open("src/" + filename) as file:
                     node = ast.parse(file.read())
                     classes = [n.name for n in node.body if isinstance(n, ast.ClassDef)]
                     if task_class_name in classes:
                         class_file_name = filename
                         break;
         if not class_file_name:
-            raise ValueError(f"Could not find the {task_class_name} class")
-        module = importlib.import_module(class_file_name[:-3])
+            raise ValueError(f"Could not find the {task_class_name} class in the src directory")
+        module = importlib.import_module('src.' + class_file_name[:-3])
         task_class = getattr(module, task_class_name)
         task_obj = task_class()
         task_obj.input_properties = task_props
