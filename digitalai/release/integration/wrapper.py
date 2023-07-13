@@ -86,6 +86,8 @@ def get_task_details():
         input_content = secret.data["input"]
 
     decrypted_json = encryptor.decrypt(input_content)
+    logger.debug("input content: %s, decrypted json: %s", input_content, decrypted_json)
+
     input_context = InputContext.from_dict(json.loads(decrypted_json))
 
     secrets = input_context.task.secrets()
