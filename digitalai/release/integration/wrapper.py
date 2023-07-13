@@ -83,6 +83,7 @@ def get_task_details():
     else:
         logger.debug("Reading input context from secret")
         kubernetes_client = kubernetes.get_client()
+        logger.debug("getting secret %s : %s", runner_namespace, input_context_secret)
         secret = kubernetes_client.read_namespaced_secret(input_context_secret, runner_namespace)
         logger.debug("secret %s", secret)
         logger.debug("secret data %s", secret.data)
