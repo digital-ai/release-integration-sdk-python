@@ -8,8 +8,7 @@ import os
 import signal
 import sys
 
-import kubernetes.client
-
+from digitalai.release.integration import kubernetes
 from .base_task import BaseTask
 from .input_context import InputContext
 from .job_data_encryptor import AESJobDataEncryptor, NoOpJobDataEncryptor
@@ -83,9 +82,10 @@ def get_task_details():
             input_context = InputContext.from_dict(json.loads(decrypted_json))
     else:
         logger.debug("Reading input context from secret")
-        secret = kubernetes.client.CoreV1Api().read_namespaced_secret(input_context_secret, runner_namespace)
-        print("secret ", secret)
-        print("secret data ", secret.data)
+        kubernetes_client = kubernetes.get_client()
+        secret = kubernetes_client.read_namespaced_secret(input_context_secret, runner_namespace)
+        logger.debug("secret %s", secret)
+        logger.debug("secret data %s", secret.data)
 
         input_content = secret.data["input"]
         input_context = InputContext.from_dict(input_content)
