@@ -8,12 +8,14 @@ import os
 import signal
 import sys
 
+import kubernetes.client
+
+from .base_task import BaseTask
 from .input_context import InputContext
 from .job_data_encryptor import AESJobDataEncryptor, NoOpJobDataEncryptor
-from .output_context import OutputContext
-from .masked_io import MaskedIO
-from .base_task import BaseTask
 from .logging_config import LOGGING_CONFIG
+from .masked_io import MaskedIO
+from .output_context import OutputContext
 
 # Mask the standard output and error streams by replacing them with MaskedIO objects.
 masked_std_out: MaskedIO = MaskedIO(sys.stdout)
@@ -22,10 +24,12 @@ sys.stdout = masked_std_out
 sys.stderr = masked_std_err
 
 # input and output context file location
-input_context_file: str = os.getenv('INPUT_LOCATION', '/input')
-output_context_file: str = os.getenv('OUTPUT_LOCATION', '/output')
+input_context_file: str = os.getenv('INPUT_LOCATION', '')
+output_context_file: str = os.getenv('OUTPUT_LOCATION', '')
 base64_session_key: str = os.getenv('SESSION_KEY', '')
 release_server_url: str = os.getenv('RELEASE_URL', '')
+input_context_secret: str = os.getenv('INPUT_CONTEXT_SECRET', '')
+runner_namespace: str = os.getenv('RUNNER_NAMESPACE', '')
 input_context: InputContext = None
 
 # Create the encryptor
@@ -70,11 +74,22 @@ def get_task_details():
     and error streams, build the task properties from the InputContext object.
     """
     logger.debug("Preparing for task properties.")
-    with open(input_context_file) as data_input:
-        input_content = data_input.read()
-        decrypted_json = encryptor.decrypt(input_content)
-        global input_context
-        input_context = InputContext.from_dict(json.loads(decrypted_json))
+    global input_context
+    if input_context_file:
+        logger.debug("Reading input context from file")
+        with open(input_context_file) as data_input:
+            input_content = data_input.read()
+            decrypted_json = encryptor.decrypt(input_content)
+            input_context = InputContext.from_dict(json.loads(decrypted_json))
+    else:
+        logger.debug("Reading input context from secret")
+        secret = kubernetes.client.CoreV1Api().read_namespaced_secret(input_context_secret, runner_namespace)
+        print("secret ", secret)
+        print("secret data ", secret.data)
+
+        input_content = secret.data["input"]
+        input_context = InputContext.from_dict(input_content)
+
     secrets = input_context.task.secrets()
     if input_context.release.automated_task_as_user.password:
         secrets.append(input_context.release.automated_task_as_user.password)
@@ -118,6 +133,7 @@ def execute_task(task_object: BaseTask):
 
 
 if __name__ == "__main__":
+    print("hello")
     try:
         # Get task details, parse the script file to get the task class, import the module,
         # create an instance of the task class, and execute the task
