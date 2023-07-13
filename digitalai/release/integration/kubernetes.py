@@ -13,7 +13,7 @@ def get_client():
     if not kubernetes_client:
         with lock:
             if not kubernetes_client:
-                config.load_incluster_config()
+                config.load_config()
                 kubernetes_client = client.CoreV1Api()
 
     return kubernetes_client
