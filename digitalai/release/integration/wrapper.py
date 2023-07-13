@@ -11,7 +11,7 @@ import sys
 from digitalai.release.integration import kubernetes
 from .base_task import BaseTask
 from .input_context import InputContext
-from .job_data_encryptor import AESJobDataEncryptor, NoOpJobDataEncryptor
+from .job_data_encryptor import AESJobDataEncryptor, NoOpJobDataEncryptor, JobDataEncryptor
 from .logging_config import LOGGING_CONFIG
 from .masked_io import MaskedIO
 from .output_context import OutputContext
@@ -32,10 +32,18 @@ runner_namespace: str = os.getenv('RUNNER_NAMESPACE', '')
 input_context: InputContext = None
 
 # Create the encryptor
-if base64_session_key:
-    encryptor = AESJobDataEncryptor(base64_session_key)
-else:
-    encryptor = NoOpJobDataEncryptor()
+encryptor: JobDataEncryptor = None
+
+
+def get_encryptor():
+    global encryptor
+    if not encryptor:
+        if base64_session_key:
+            encryptor = AESJobDataEncryptor(base64_session_key)
+        else:
+            encryptor = NoOpJobDataEncryptor()
+    return encryptor
+
 
 # Set up logging
 logging.config.dictConfig(LOGGING_CONFIG)
@@ -83,9 +91,13 @@ def get_task_details():
         logger.debug("getting secret %s : %s", runner_namespace, input_context_secret)
         secret = kubernetes.get_client().read_namespaced_secret(input_context_secret, runner_namespace)
         logger.debug("secret %s", secret)
+
+        global base64_session_key
+        base64_session_key = secret.data["session-key"]
+
         input_content = secret.data["input"]
 
-    decrypted_json = encryptor.decrypt(input_content)
+    decrypted_json = get_encryptor().decrypt(input_content)
     logger.debug("input content: %s, decrypted json: %s", input_content, decrypted_json)
 
     input_context = InputContext.from_dict(json.loads(decrypted_json))
