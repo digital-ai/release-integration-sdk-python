@@ -133,7 +133,9 @@ def execute_task(task_object: BaseTask):
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.DEBUG)
     logger.debug("hello")
+    print("hi")
     try:
         # Get task details, parse the script file to get the task class, import the module,
         # create an instance of the task class, and execute the task
