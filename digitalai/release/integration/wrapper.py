@@ -78,18 +78,15 @@ def get_task_details():
         logger.debug("Reading input context from file")
         with open(input_context_file) as data_input:
             input_content = data_input.read()
-            decrypted_json = encryptor.decrypt(input_content)
-            input_context = InputContext.from_dict(json.loads(decrypted_json))
     else:
         logger.debug("Reading input context from secret")
-        kubernetes_client = kubernetes.get_client()
         logger.debug("getting secret %s : %s", runner_namespace, input_context_secret)
-        secret = kubernetes_client.read_namespaced_secret(input_context_secret, runner_namespace)
+        secret = kubernetes.get_client().read_namespaced_secret(input_context_secret, runner_namespace)
         logger.debug("secret %s", secret)
-        logger.debug("secret data %s", secret.data)
-
         input_content = secret.data["input"]
-        input_context = InputContext.from_dict(input_content)
+
+    decrypted_json = encryptor.decrypt(input_content)
+    input_context = InputContext.from_dict(json.loads(decrypted_json))
 
     secrets = input_context.task.secrets()
     if input_context.release.automated_task_as_user.password:
