@@ -1,5 +1,4 @@
 import base64
-import logging
 from abc import ABC, abstractmethod
 
 from Cryptodome.Cipher import AES
@@ -96,7 +95,7 @@ class AESJobDataEncryptor(JobDataEncryptor):
         """
         byte_array = base64.b64decode(content)
         context_bytes = byte_array[16:-16]
-        logging.debug("decrypt content: %s, secret key: %s, context bytes: %s")
+        print("decrypt content: ", self.secret_key, "context bytes: ", context_bytes)
         cipher = AES.new(self.secret_key, AES.MODE_GCM, byte_array[:16])
         decrypted = cipher.decrypt_and_verify(context_bytes, byte_array[-16:])
         return decrypted.decode("UTF-8")
