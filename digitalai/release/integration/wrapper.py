@@ -8,7 +8,7 @@ import os
 import signal
 import sys
 
-from digitalai.release.integration import kubernetes
+from digitalai.release.integration import k8s
 from .base_task import BaseTask
 from .input_context import InputContext
 from .job_data_encryptor import AESJobDataEncryptor, NoOpJobDataEncryptor, JobDataEncryptor
@@ -89,7 +89,7 @@ def get_task_details():
     else:
         logger.debug("Reading input context from secret")
         logger.debug("getting secret %s : %s", runner_namespace, input_context_secret)
-        secret = kubernetes.get_client().read_namespaced_secret(input_context_secret, runner_namespace)
+        secret = k8s.get_client().read_namespaced_secret(input_context_secret, runner_namespace)
         logger.debug("secret %s", secret)
 
         global base64_session_key
