@@ -9,6 +9,8 @@ import os
 import signal
 import sys
 
+import urllib3
+
 from digitalai.release.integration import k8s
 from .base_task import BaseTask
 from .input_context import InputContext
@@ -28,6 +30,7 @@ input_context_file: str = os.getenv('INPUT_LOCATION', '')
 output_context_file: str = os.getenv('OUTPUT_LOCATION', '')
 base64_session_key: str = os.getenv('SESSION_KEY', '')
 release_server_url: str = os.getenv('RELEASE_URL', '')
+callback_url: str = os.getenv('CALLBACK_URL', '')
 input_context_secret: str = os.getenv('INPUT_CONTEXT_SECRET', '')
 result_secret_key: str = os.getenv('RESULT_SECRET_NAME', '')
 runner_namespace: str = os.getenv('RUNNER_NAMESPACE', '')
@@ -94,9 +97,9 @@ def get_task_details():
         secret = k8s.get_client().read_namespaced_secret(input_context_secret, runner_namespace)
         logger.debug("secret %s", secret)
 
-        global base64_session_key
+        global base64_session_key, callback_url
         base64_session_key = base64.b64decode(secret.data["session-key"])
-
+        callback_url = base64.b64decode(secret.data["url"])
         input_content = base64.b64decode(secret.data["input"])
 
     decrypted_json = get_encryptor().decrypt(input_content)
@@ -129,14 +132,17 @@ def update_output_context_file(output_context: OutputContext):
             logger.debug("Writing output context to file")
             with open(output_context_file, "w") as data_output:
                 data_output.write(encrypted_json)
-        elif result_secret_key:
+        if result_secret_key:
             logger.debug("Writing output context to secret")
             namespace, name, key = k8s.split_secret_resource_data(result_secret_key)
             logger.debug("namespace %s, name %s, key %s", namespace, name, key)
             secret = k8s.get_client().read_namespaced_secret(name, namespace)
             secret.data[key] = encrypted_json
             k8s.get_client().replace_namespaced_secret(name, namespace, secret)
-
+        if callback_url:
+            logger.debug("Pushing result using HTTP")
+            urllib3.PoolManager().request("POST", callback_url, headers={'Content-Type': 'application/json'},
+                                          body=encrypted_json)
 
     except Exception:
         logger.error("Unexpected error occurred.", exc_info=True)
