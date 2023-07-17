@@ -17,3 +17,10 @@ def get_client():
                 kubernetes_client = client.CoreV1Api()
 
     return kubernetes_client
+
+
+def split_secret_resource_data(secret_entry: str) -> tuple:
+    split = secret_entry.split(":")
+    if len(split) != 3:
+        return "", "", ""
+    return tuple(split)

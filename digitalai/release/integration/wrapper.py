@@ -29,6 +29,7 @@ output_context_file: str = os.getenv('OUTPUT_LOCATION', '')
 base64_session_key: str = os.getenv('SESSION_KEY', '')
 release_server_url: str = os.getenv('RELEASE_URL', '')
 input_context_secret: str = os.getenv('INPUT_CONTEXT_SECRET', '')
+result_secret_key: str = os.getenv('RESULT_SECRET_NAME', '')
 runner_namespace: str = os.getenv('RUNNER_NAMESPACE', '')
 input_context: InputContext = None
 
@@ -119,11 +120,23 @@ def update_output_context_file(output_context: OutputContext):
     to the output context file.
     """
     logger.debug("Creating output context file")
+    logger.debug("Output context is %s", output_context)
+    output_content = json.dumps(output_context.to_dict())
+    encrypted_json = encryptor.encrypt(output_content)
+    logger.debug("encrypted json %s", encrypted_json)
     try:
-        with open(output_context_file, "w") as data_output:
-            output_content = json.dumps(output_context.to_dict())
-            encrypted_json = encryptor.encrypt(output_content)
-            data_output.write(encrypted_json)
+        if output_context_file:
+            logger.debug("Writing output context to file")
+            with open(output_context_file, "w") as data_output:
+                data_output.write(encrypted_json)
+        elif result_secret_key:
+            logger.debug("Writing output context to secret")
+            namespace, name, key = k8s.split_secret_resource_data(result_secret_key)
+            secret = k8s.get_client().read_namespaced_secret(name, namespace)
+            secret.data[key] = encrypted_json
+            k8s.get_client().patch_namespaced_secret(name, namespace, secret)
+
+
     except Exception:
         logger.error("Unexpected error occurred.", exc_info=True)
 
