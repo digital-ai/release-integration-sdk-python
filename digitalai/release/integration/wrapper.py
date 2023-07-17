@@ -140,7 +140,7 @@ def update_output_context_file(output_context: OutputContext):
             secret.data[key] = encrypted_json
             k8s.get_client().replace_namespaced_secret(name, namespace, secret)
         if callback_url:
-            logger.debug("Pushing result using HTTP")
+            logger.debug("Pushing result using HTTP to %s", callback_url)
             urllib3.PoolManager().request("POST", callback_url, headers={'Content-Type': 'application/json'},
                                           body=encrypted_json)
 
