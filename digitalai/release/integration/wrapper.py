@@ -132,6 +132,7 @@ def update_output_context_file(output_context: OutputContext):
         elif result_secret_key:
             logger.debug("Writing output context to secret")
             namespace, name, key = k8s.split_secret_resource_data(result_secret_key)
+            logger.debug("namespace %s, name %s, key %s")
             secret = k8s.get_client().read_namespaced_secret(name, namespace)
             secret.data[key] = encrypted_json
             k8s.get_client().patch_namespaced_secret(name, namespace, secret)
