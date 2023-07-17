@@ -142,7 +142,8 @@ def update_output_context_file(output_context: OutputContext):
         if callback_url:
             logger.debug("Pushing result using HTTP to %s", callback_url)
             byte_array = base64.b64decode(callback_url)
-            url = byte_array[16:-16].decode("UTF-8")
+            decoded_url = byte_array[16:-16].decode("UTF-8")
+            url = urllib3.util.parse_url(decoded_url)
             logger.debug("Pushing to %s", url)
             urllib3.PoolManager().request("POST", url, headers={'Content-Type': 'application/json'},
                                           body=encrypted_json)
