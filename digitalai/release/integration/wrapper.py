@@ -135,7 +135,7 @@ def update_output_context_file(output_context: OutputContext):
             logger.debug("namespace %s, name %s, key %s", namespace, name, key)
             secret = k8s.get_client().read_namespaced_secret(name, namespace)
             secret.data[key] = encrypted_json
-            k8s.get_client().patch_namespaced_secret(name, namespace, secret)
+            k8s.get_client().replace_namespaced_secret(name, namespace, secret)
 
 
     except Exception:
