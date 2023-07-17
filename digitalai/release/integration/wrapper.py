@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import base64
 import importlib
 import json
 import logging.config
@@ -93,9 +94,9 @@ def get_task_details():
         logger.debug("secret %s", secret)
 
         global base64_session_key
-        base64_session_key = secret.data["session-key"]
+        base64_session_key = base64.b64decode(secret.data["session-key"])
 
-        input_content = secret.data["input"]
+        input_content = base64.b64decode(secret.data["input"])
 
     decrypted_json = get_encryptor().decrypt(input_content)
     logger.debug("input content: %s, decrypted json: %s", input_content, decrypted_json)
