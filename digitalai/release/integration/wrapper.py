@@ -86,7 +86,6 @@ def get_task_details():
     and error streams, build the task properties from the InputContext object.
     """
     logger.debug("Preparing for task properties.")
-    global input_context
     if input_context_file:
         logger.debug("Reading input context from file")
         with open(input_context_file) as data_input:
@@ -101,6 +100,7 @@ def get_task_details():
         input_content = base64.b64decode(secret.data["input"])
 
     decrypted_json = get_encryptor().decrypt(input_content)
+    global input_context
     input_context = InputContext.from_dict(json.loads(decrypted_json))
 
     secrets = input_context.task.secrets()
