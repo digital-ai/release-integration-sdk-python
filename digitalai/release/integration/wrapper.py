@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import base64
 import importlib
 import json
 import logging.config
@@ -8,12 +9,15 @@ import os
 import signal
 import sys
 
-from .input_context import InputContext
-from .job_data_encryptor import AESJobDataEncryptor, NoOpJobDataEncryptor
-from .output_context import OutputContext
-from .masked_io import MaskedIO
+import urllib3
+
+from digitalai.release.integration import k8s
 from .base_task import BaseTask
+from .input_context import InputContext
+from .job_data_encryptor import AESJobDataEncryptor, NoOpJobDataEncryptor, JobDataEncryptor
 from .logging_config import LOGGING_CONFIG
+from .masked_io import MaskedIO
+from .output_context import OutputContext
 
 # Mask the standard output and error streams by replacing them with MaskedIO objects.
 masked_std_out: MaskedIO = MaskedIO(sys.stdout)
@@ -22,17 +26,29 @@ sys.stdout = masked_std_out
 sys.stderr = masked_std_err
 
 # input and output context file location
-input_context_file: str = os.getenv('INPUT_LOCATION', '/input')
-output_context_file: str = os.getenv('OUTPUT_LOCATION', '/output')
+input_context_file: str = os.getenv('INPUT_LOCATION', '')
+output_context_file: str = os.getenv('OUTPUT_LOCATION', '')
 base64_session_key: str = os.getenv('SESSION_KEY', '')
 release_server_url: str = os.getenv('RELEASE_URL', '')
+callback_url: str = os.getenv('CALLBACK_URL', '')
+input_context_secret: str = os.getenv('INPUT_CONTEXT_SECRET', '')
+result_secret_key: str = os.getenv('RESULT_SECRET_NAME', '')
+runner_namespace: str = os.getenv('RUNNER_NAMESPACE', '')
 input_context: InputContext = None
 
 # Create the encryptor
-if base64_session_key:
-    encryptor = AESJobDataEncryptor(base64_session_key)
-else:
-    encryptor = NoOpJobDataEncryptor()
+encryptor: JobDataEncryptor = None
+
+
+def get_encryptor():
+    global encryptor
+    if not encryptor:
+        if base64_session_key:
+            encryptor = AESJobDataEncryptor(base64_session_key)
+        else:
+            encryptor = NoOpJobDataEncryptor()
+    return encryptor
+
 
 # Set up logging
 logging.config.dictConfig(LOGGING_CONFIG)
@@ -65,16 +81,28 @@ signal.signal(signal.SIGTERM, abort_handler)
 
 def get_task_details():
     """
-    Get the task details by reading the input context file, decrypting the contents using the encryptor,
+    Get the task details by reading the input context file or fetching from secret, decrypting the contents using the encryptor,
     and parsing the JSON data into an InputContext object. Then, set the secrets for the masked standard output
     and error streams, build the task properties from the InputContext object.
     """
     logger.debug("Preparing for task properties.")
-    with open(input_context_file) as data_input:
-        input_content = data_input.read()
-        decrypted_json = encryptor.decrypt(input_content)
-        global input_context
-        input_context = InputContext.from_dict(json.loads(decrypted_json))
+    if input_context_file:
+        logger.debug("Reading input context from file")
+        with open(input_context_file) as data_input:
+            input_content = data_input.read()
+    else:
+        logger.debug("Reading input context from secret")
+        secret = k8s.get_client().read_namespaced_secret(input_context_secret, runner_namespace)
+
+        global base64_session_key, callback_url
+        base64_session_key = base64.b64decode(secret.data["session-key"])
+        callback_url = base64.b64decode(secret.data["url"])
+        input_content = base64.b64decode(secret.data["input"])
+
+    decrypted_json = get_encryptor().decrypt(input_content)
+    global input_context
+    input_context = InputContext.from_dict(json.loads(decrypted_json))
+
     secrets = input_context.task.secrets()
     if input_context.release.automated_task_as_user.password:
         secrets.append(input_context.release.automated_task_as_user.password)
@@ -84,18 +112,32 @@ def get_task_details():
     return task_properties, input_context.task.type
 
 
-def update_output_context_file(output_context: OutputContext):
+def update_output_context(output_context: OutputContext):
     """
-    Update the output context file by converting the output context object to a dictionary, serializing the
+    Update the output context file or secret by converting the output context object to a dictionary, serializing the
     dictionary to a JSON string, encrypting the string using the encryptor, and writing the encrypted string
-    to the output context file.
+    to the output context file or secret and pushing to callback URL.
     """
     logger.debug("Creating output context file")
+    output_content = json.dumps(output_context.to_dict())
+    encrypted_json = encryptor.encrypt(output_content)
     try:
-        with open(output_context_file, "w") as data_output:
-            output_content = json.dumps(output_context.to_dict())
-            encrypted_json = encryptor.encrypt(output_content)
-            data_output.write(encrypted_json)
+        if output_context_file:
+            logger.debug("Writing output context to file")
+            with open(output_context_file, "w") as data_output:
+                data_output.write(encrypted_json)
+        if result_secret_key:
+            logger.debug("Writing output context to secret")
+            namespace, name, key = k8s.split_secret_resource_data(result_secret_key)
+            secret = k8s.get_client().read_namespaced_secret(name, namespace)
+            secret.data[key] = encrypted_json
+            k8s.get_client().replace_namespaced_secret(name, namespace, secret)
+        if callback_url:
+            logger.debug("Pushing result using HTTP")
+            url = base64.b64decode(callback_url).decode("UTF-8")
+            urllib3.PoolManager().request("POST", url, headers={'Content-Type': 'application/json'},
+                                          body=encrypted_json)
+
     except Exception:
         logger.error("Unexpected error occurred.", exc_info=True)
 
@@ -114,7 +156,7 @@ def execute_task(task_object: BaseTask):
     except Exception:
         logger.error("Unexpected error occurred.", exc_info=True)
     finally:
-        update_output_context_file(dai_task_object.get_output_context())
+        update_output_context(dai_task_object.get_output_context())
 
 
 if __name__ == "__main__":
@@ -145,4 +187,4 @@ if __name__ == "__main__":
     except Exception as e:
         # Log the error and update the output context file with exit code 1 if an exception is raised
         logger.error("Unexpected error occurred.", exc_info=True)
-        update_output_context_file(OutputContext(1, str(e), {}, []))
+        update_output_context(OutputContext(1, str(e), {}, []))
