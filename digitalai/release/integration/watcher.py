@@ -11,7 +11,6 @@ logger = logging.getLogger("Digitalai")
 
 def start_input_context_watcher(on_input_context_update_func):
     logger.debug("Input context watcher started")
-
     stop = threading.Event()
 
     try:
@@ -30,8 +29,8 @@ def start_input_secret_watcher(on_input_context_update_func, stop):
 
     field_selector = "metadata.name=" + os.getenv("INPUT_CONTEXT_SECRET")
     namespace = os.getenv("RUNNER_NAMESPACE")
-
     old_input = None
+
     w = watch.Watch()
     for event in w.stream(kubernetes_client.list_namespaced_secret, namespace, field_selector=field_selector):
         secret = event['object']
