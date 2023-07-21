@@ -14,7 +14,7 @@ import urllib3
 from digitalai.release.integration import k8s, watcher
 from .base_task import BaseTask
 from .input_context import InputContext
-from .job_data_encryptor import AESJobDataEncryptor, NoOpJobDataEncryptor, JobDataEncryptor
+from .job_data_encryptor import AESJobDataEncryptor, NoOpJobDataEncryptor
 from .logging_config import LOGGING_CONFIG
 from .masked_io import MaskedIO
 from .output_context import OutputContext
@@ -39,16 +39,11 @@ execution_mode: str = os.getenv('EXECUTOR_EXECUTION_MODE', '')
 input_context: InputContext = None
 
 # Create the encryptor
-encryptor: JobDataEncryptor = None
-
-
 def get_encryptor():
-    global encryptor
-    if not encryptor:
-        if base64_session_key:
-            encryptor = AESJobDataEncryptor(base64_session_key)
-        else:
-            encryptor = NoOpJobDataEncryptor()
+    if base64_session_key:
+        encryptor = AESJobDataEncryptor(base64_session_key)
+    else:
+        encryptor = NoOpJobDataEncryptor()
     return encryptor
 
 
@@ -122,7 +117,7 @@ def update_output_context(output_context: OutputContext):
     """
     logger.debug("Creating output context file")
     output_content = json.dumps(output_context.to_dict())
-    encrypted_json = encryptor.encrypt(output_content)
+    encrypted_json = get_encryptor().encrypt(output_content)
     try:
         if output_context_file:
             logger.debug("Writing output context to file")
