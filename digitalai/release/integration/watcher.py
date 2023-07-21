@@ -10,7 +10,7 @@ logger = logging.getLogger("Digitalai")
 
 
 def start_input_context_watcher(on_input_context_update_func):
-    logger.debug("input context watcher started")
+    logger.debug("Input context watcher started")
 
     stop = threading.Event()
 
@@ -25,7 +25,7 @@ def start_input_context_watcher(on_input_context_update_func):
 
 
 def start_input_secret_watcher(on_input_context_update_func, stop):
-    logger.debug("input secret watcher started")
+    logger.debug("Input secret watcher started")
     kubernetes_client = k8s.get_client()
 
     field_selector = "metadata.name=" + os.getenv("INPUT_CONTEXT_SECRET")
