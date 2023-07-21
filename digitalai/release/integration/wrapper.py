@@ -38,6 +38,7 @@ execution_mode: str = os.getenv('EXECUTOR_EXECUTION_MODE', '')
 
 input_context: InputContext = None
 
+
 # Create the encryptor
 def get_encryptor():
     if base64_session_key:
