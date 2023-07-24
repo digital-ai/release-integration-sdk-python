@@ -11,10 +11,10 @@ import sys
 
 import urllib3
 
-from digitalai.release.integration import k8s
+from digitalai.release.integration import k8s, watcher
 from .base_task import BaseTask
 from .input_context import InputContext
-from .job_data_encryptor import AESJobDataEncryptor, NoOpJobDataEncryptor, JobDataEncryptor
+from .job_data_encryptor import AESJobDataEncryptor, NoOpJobDataEncryptor
 from .logging_config import LOGGING_CONFIG
 from .masked_io import MaskedIO
 from .output_context import OutputContext
@@ -34,19 +34,17 @@ callback_url: str = os.getenv('CALLBACK_URL', '')
 input_context_secret: str = os.getenv('INPUT_CONTEXT_SECRET', '')
 result_secret_key: str = os.getenv('RESULT_SECRET_NAME', '')
 runner_namespace: str = os.getenv('RUNNER_NAMESPACE', '')
+execution_mode: str = os.getenv('EXECUTOR_EXECUTION_MODE', '')
+
 input_context: InputContext = None
 
+
 # Create the encryptor
-encryptor: JobDataEncryptor = None
-
-
 def get_encryptor():
-    global encryptor
-    if not encryptor:
-        if base64_session_key:
-            encryptor = AESJobDataEncryptor(base64_session_key)
-        else:
-            encryptor = NoOpJobDataEncryptor()
+    if base64_session_key:
+        encryptor = AESJobDataEncryptor(base64_session_key)
+    else:
+        encryptor = NoOpJobDataEncryptor()
     return encryptor
 
 
@@ -120,7 +118,7 @@ def update_output_context(output_context: OutputContext):
     """
     logger.debug("Creating output context file")
     output_content = json.dumps(output_context.to_dict())
-    encrypted_json = encryptor.encrypt(output_content)
+    encrypted_json = get_encryptor().encrypt(output_content)
     try:
         if output_context_file:
             logger.debug("Writing output context to file")
@@ -159,7 +157,7 @@ def execute_task(task_object: BaseTask):
         update_output_context(dai_task_object.get_output_context())
 
 
-if __name__ == "__main__":
+def run():
     try:
         # Get task details, parse the script file to get the task class, import the module,
         # create an instance of the task class, and execute the task
@@ -184,7 +182,13 @@ if __name__ == "__main__":
         task_obj.release_context = input_context.release
         task_obj.task_id = input_context.task.id
         execute_task(task_obj)
+        if execution_mode == "daemon":
+            watcher.start_input_context_watcher(run)
     except Exception as e:
         # Log the error and update the output context file with exit code 1 if an exception is raised
         logger.error("Unexpected error occurred.", exc_info=True)
         update_output_context(OutputContext(1, str(e), {}, []))
+
+
+if __name__ == "__main__":
+    run()
