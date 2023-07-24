@@ -157,7 +157,7 @@ def execute_task(task_object: BaseTask):
         update_output_context(dai_task_object.get_output_context())
 
 
-def execute():
+def run():
     try:
         # Get task details, parse the script file to get the task class, import the module,
         # create an instance of the task class, and execute the task
@@ -183,7 +183,7 @@ def execute():
         task_obj.task_id = input_context.task.id
         execute_task(task_obj)
         if execution_mode == "daemon":
-            watcher.start_input_context_watcher(execute)
+            watcher.start_input_context_watcher(run)
     except Exception as e:
         # Log the error and update the output context file with exit code 1 if an exception is raised
         logger.error("Unexpected error occurred.", exc_info=True)
@@ -191,4 +191,4 @@ def execute():
 
 
 if __name__ == "__main__":
-    execute()
+    run()
