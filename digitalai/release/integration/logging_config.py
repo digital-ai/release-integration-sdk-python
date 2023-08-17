@@ -4,7 +4,7 @@ LOGGING_CONFIG = ({
     'disable_existing_loggers': False,
     'formatters': {
         'standard': {
-            'format': '%(asctime)s %(levelname)-7s [%(filename)s:%(lineno)d] - %(message)s'
+            'format': '%(levelname)-7s [%(filename)s:%(lineno)d] - %(message)s'
         }
     },
     'handlers': {

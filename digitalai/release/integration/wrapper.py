@@ -157,24 +157,31 @@ def execute_task(task_object: BaseTask):
         update_output_context(dai_task_object.get_output_context())
 
 
+def find_class_file(root_dir, class_name):
+    for root, _, files in os.walk(root_dir):
+        for filename in files:
+            if filename.endswith('.py'):
+                filepath = os.path.join(root, filename)
+                with open(filepath) as file:
+                    node = ast.parse(file.read())
+                    classes = [n.name for n in node.body if isinstance(n, ast.ClassDef)]
+                    if class_name in classes:
+                        return filepath
+    return None
+
+
 def run():
     try:
         # Get task details, parse the script file to get the task class, import the module,
         # create an instance of the task class, and execute the task
         task_props, task_type = get_task_details()
         task_class_name = task_type.split(".")[1]
-        class_file_name = ''
-        for filename in os.listdir(os.getcwd()):
-            if filename.endswith('.py'):
-                with open(filename) as file:
-                    node = ast.parse(file.read())
-                    classes = [n.name for n in node.body if isinstance(n, ast.ClassDef)]
-                    if task_class_name in classes:
-                        class_file_name = filename
-                        break;
-        if not class_file_name:
+        class_file_path = find_class_file(os.getcwd(), task_class_name)
+        if not class_file_path:
             raise ValueError(f"Could not find the {task_class_name} class")
-        module = importlib.import_module(class_file_name[:-3])
+        module_name = class_file_path.replace(os.getcwd()+os.sep,'')
+        module_name = module_name.replace(".py", "").replace(os.sep, ".")
+        module = importlib.import_module(module_name)
         task_class = getattr(module, task_class_name)
         task_obj = task_class()
         task_obj.input_properties = task_props
