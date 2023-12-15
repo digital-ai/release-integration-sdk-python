@@ -97,7 +97,7 @@ def get_task_details():
         base64_session_key = base64.b64decode(secret.data["session-key"])
         callback_url = base64.b64decode(secret.data["url"])
 
-        input_content = secret.data("input")
+        input_content = secret.data["input"]
         if not input_content or len(input_content) == 0:
             fetch_url_base64 = secret.get("fetchUrl")
             if not fetch_url_base64 or len(fetch_url_base64) == 0:
