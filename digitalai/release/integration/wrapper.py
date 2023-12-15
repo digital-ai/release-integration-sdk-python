@@ -104,7 +104,9 @@ def get_task_details():
                 raise ValueError("Cannot find fetch URL for task")
 
             fetch_url_bytes = base64.b64decode(fetch_url_base64)
+            logger.info(f"fetchurl base 64: {fetch_url_base64}, fetch url bytes: {fetch_url_bytes}")
             try:
+                logger.info(f"fetch url bytes decode {fetch_url_bytes.decode('utf-8')}")
                 response = requests.get(fetch_url_bytes.decode('utf-8'))
                 response.raise_for_status()
             except requests.exceptions.RequestException as e:
