@@ -112,7 +112,7 @@ def get_task_details():
                 response.raise_for_status()
             except requests.exceptions.RequestException as e:
                 logger.error("Failed to fetch data.", exc_info=True)
-                raise
+                raise e
 
             if response.status_code != 200:
                 raise ValueError(f"Failed to fetch data, server returned status: {response.status_code}")
