@@ -99,7 +99,7 @@ def get_task_details():
 
         input_content = secret.data["input"]
         if not input_content or len(input_content) == 0:
-            fetch_url_base64 = secret.get("fetchUrl")
+            fetch_url_base64 = secret.data["fetchUrl"]
             if not fetch_url_base64 or len(fetch_url_base64) == 0:
                 raise ValueError("Cannot find fetch URL for task")
 
