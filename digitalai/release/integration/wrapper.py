@@ -9,6 +9,7 @@ import os
 import signal
 import sys
 
+import requests
 import urllib3
 
 from digitalai.release.integration import k8s, watcher
@@ -95,7 +96,27 @@ def get_task_details():
         global base64_session_key, callback_url
         base64_session_key = base64.b64decode(secret.data["session-key"])
         callback_url = base64.b64decode(secret.data["url"])
-        input_content = base64.b64decode(secret.data["input"])
+
+        input_content = secret.data("input")
+        if not input_content or len(input_content) == 0:
+            fetch_url_base64 = secret.get("fetchUrl")
+            if not fetch_url_base64 or len(fetch_url_base64) == 0:
+                raise ValueError("Cannot find fetch URL for task")
+
+            fetch_url_bytes = base64.b64decode(fetch_url_base64)
+            try:
+                response = requests.get(fetch_url_bytes.decode('utf-8'))
+                response.raise_for_status()
+            except requests.exceptions.RequestException as e:
+                logger.error("Failed to fetch data.", exc_info=True)
+                raise
+
+            if response.status_code != 200:
+                raise ValueError(f"Failed to fetch data, server returned status: {response.status_code}")
+
+            input_content = response.content
+        else:
+            input_content = base64.b64decode(input_content)
 
     decrypted_json = get_encryptor().decrypt(input_content)
     global input_context
