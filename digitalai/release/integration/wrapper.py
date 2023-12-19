@@ -105,9 +105,7 @@ def get_task_details():
 
             fetch_url_bytes = base64.b64decode(fetch_url_base64)
             fetch_url = base64.b64decode(fetch_url_bytes).decode("UTF-8")
-            logger.info(f"fetchurl base 64: {fetch_url_base64}, fetch url bytes: {fetch_url_bytes}")
             try:
-                logger.info(f"fetch url bytes decode {fetch_url_bytes.decode('utf-8')}")
                 response = requests.get(fetch_url)
                 response.raise_for_status()
             except requests.exceptions.RequestException as e:
@@ -126,7 +124,7 @@ def get_task_details():
     input_context = InputContext.from_dict(json.loads(decrypted_json))
 
     secrets = input_context.task.secrets()
-    if input_context.release and input_context.release.automated_task_as_user and input_context.release.automated_task_as_user.password:
+    if input_context.release.automated_task_as_user.password:
         secrets.append(input_context.release.automated_task_as_user.password)
     masked_std_out.secrets = secrets
     masked_std_err.secrets = secrets
