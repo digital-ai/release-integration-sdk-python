@@ -35,7 +35,6 @@ def start_input_secret_watcher(on_input_context_update_func, stop):
     w = watch.Watch()
     for event in w.stream(kubernetes_client.list_namespaced_secret, namespace, field_selector=field_selector):
         secret = event['object']
-        logger.debug(f"secret {secret}")
         new_session_key = secret.data.get("session-key")
 
         # Checking if 'session-key' field has changed
