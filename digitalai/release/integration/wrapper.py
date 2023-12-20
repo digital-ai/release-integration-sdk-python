@@ -124,7 +124,7 @@ def get_task_details():
     input_context = InputContext.from_dict(json.loads(decrypted_json))
 
     secrets = input_context.task.secrets()
-    if input_context.release.automated_task_as_user.password:
+    if input_context.release and input_context.release.automated_task_as_user and input_context.release.automated_task_as_user.password:
         secrets.append(input_context.release.automated_task_as_user.password)
     masked_std_out.secrets = secrets
     masked_std_err.secrets = secrets
