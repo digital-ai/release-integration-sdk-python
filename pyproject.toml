@@ -7,6 +7,9 @@ exclude = [
   "digitalai/release/v1/docs/*"
 ]
 
+[tool.hatch.build.targets.wheel]
+packages = ["digitalai"]
+
 [project]
 name = "digitalai_release_sdk"
 version = "23.3.0"
@@ -31,5 +34,3 @@ classifiers = [
 
 [project.urls]
 "Homepage" = "https://digital.ai/"
-
-
