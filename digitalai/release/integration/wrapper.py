@@ -212,12 +212,14 @@ def run():
         task_obj.task_id = input_context.task.id
         raise Exception("wrapper error")
         execute_task(task_obj)
-        if execution_mode == "daemon":
-            watcher.start_input_context_watcher(run)
     except Exception as e:
         # Log the error and update the output context file with exit code 1 if an exception is raised
         logger.error("Unexpected error occurred.", exc_info=True)
         update_output_context(OutputContext(1, str(e), {}, []))
+    finally:
+        if execution_mode == "daemon":
+            watcher.start_input_context_watcher(run)
+
 
 
 if __name__ == "__main__":
