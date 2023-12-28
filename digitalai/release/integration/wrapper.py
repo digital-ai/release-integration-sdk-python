@@ -210,7 +210,6 @@ def run():
         task_obj.release_server_url = release_server_url.strip('/')
         task_obj.release_context = input_context.release
         task_obj.task_id = input_context.task.id
-        raise Exception("wrapper error")
         execute_task(task_obj)
     except Exception as e:
         # Log the error and update the output context file with exit code 1 if an exception is raised
