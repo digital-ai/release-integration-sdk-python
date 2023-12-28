@@ -210,6 +210,7 @@ def run():
         task_obj.release_server_url = release_server_url.strip('/')
         task_obj.release_context = input_context.release
         task_obj.task_id = input_context.task.id
+        raise Exception("wrapper error")
         execute_task(task_obj)
         if execution_mode == "daemon":
             watcher.start_input_context_watcher(run)
