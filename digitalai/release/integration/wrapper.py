@@ -183,8 +183,9 @@ def update_output_context(output_context: OutputContext):
 
 def retry_push_result(encrypted_json):
     """
-    Function keeps retrying to push encrypted data to the callback URL with exponential backoff.
-    Callback URL is re-fetched from input context secret due to probable remote-runner port change.
+    Keeps retrying to push encrypted data to the callback URL with exponential backoff.
+    Callback URL is re-fetched from input context secret due to possible remote-runner port change.
+    If the push is unsuccessful after max backoff of 3 minutes, it will exit with error
     """
     retry_delay = 1
     max_backoff = 180
