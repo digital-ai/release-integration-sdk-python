@@ -170,8 +170,8 @@ def update_output_context(output_context: OutputContext):
                 urllib3.PoolManager().request("POST", url, headers={'Content-Type': 'application/json'},
                                               body=encrypted_json)
             except Exception as e:
-                logger.warning("Cannot finish Callback request.", exc_info=True)
                 if push_retry:
+                    logger.error("Cannot finish Callback request.", exc_info=True)
                     logger.info("Retry flag was set on Callback request, retrying request")
                     retry_push_result(encrypted_json)
                 else:
