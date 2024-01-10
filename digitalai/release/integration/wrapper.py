@@ -166,13 +166,18 @@ def update_output_context(output_context: OutputContext):
         if callback_url:
             logger.debug("Pushing result using HTTP")
             url = base64.b64decode(callback_url).decode("UTF-8")
+            retries = Retry(connect=0, read=0, redirect=0, status=0)
+            http = urllib3.PoolManager(retries=retries)
+
             try:
-                urllib3.PoolManager().request("POST", url, headers={'Content-Type': 'application/json'}, body=encrypted_json)
+                http.request("POST", url, headers={'Content-Type': 'application/json'}, body=encrypted_json)
             except Exception as e:
                 logger.warning("Cannot finish Callback request.", exc_info=True)
                 if push_retry:
                     logger.info("Retry flag was set on Callback request, retrying request")
                     retry_push_result(encrypted_json)
+                else:
+                    raise
 
     except Exception:
         logger.error("Unexpected error occurred.", exc_info=True)
@@ -184,7 +189,7 @@ def retry_push_result(encrypted_json):
     Callback URL is re-fetched from input context secret due to probable remote-runner port change.
     """
     retry_delay = 1
-    max_backoff = 180  # Maximum backoff of 3 minutes (180 seconds)
+    max_backoff = 180
     backoff_factor = 2.0
 
     retries = Retry(connect=0, read=0, redirect=0, status=0)
@@ -197,12 +202,11 @@ def retry_push_result(encrypted_json):
             url = base64.b64decode(callback_url).decode("UTF-8")
 
             response = http.request("POST", url, headers={'Content-Type': 'application/json'}, body=encrypted_json)
-            return response  # Success, exit the loop
+            return response
         except Exception as e:
             logger.warning(f"Cannot finish retried Callback request: {e}. Retrying in {retry_delay} seconds...", exc_info=True)
             time.sleep(retry_delay)
 
-            # Increase the delay for the next retry
             retry_delay *= backoff_factor
             if retry_delay > max_backoff:
                 logger.warning("Maximum retry backoff reached, aborting with error.")
