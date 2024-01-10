@@ -172,7 +172,7 @@ def update_output_context(output_context: OutputContext):
             try:
                 http.request("POST", url, headers={'Content-Type': 'application/json'}, body=encrypted_json)
             except Exception as e:
-                logger.warning("Cannot finish Callback request.", exc_info=True)
+                # logger.warning("Cannot finish Callback request.", exc_info=True)
                 if push_retry:
                     logger.info("Retry flag was set on Callback request, retrying request")
                     retry_push_result(encrypted_json)
@@ -204,7 +204,7 @@ def retry_push_result(encrypted_json):
             response = http.request("POST", url, headers={'Content-Type': 'application/json'}, body=encrypted_json)
             return response
         except Exception as e:
-            logger.warning(f"Cannot finish retried Callback request: {e}. Retrying in {retry_delay} seconds...", exc_info=True)
+            # logger.warning(f"Cannot finish retried Callback request: {e}. Retrying in {retry_delay} seconds...", exc_info=True)
             time.sleep(retry_delay)
 
             retry_delay *= backoff_factor
