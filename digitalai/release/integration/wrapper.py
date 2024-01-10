@@ -166,11 +166,7 @@ def update_output_context(output_context: OutputContext):
         if callback_url:
             logger.debug("Pushing result using HTTP")
             url = base64.b64decode(callback_url).decode("UTF-8")
-            # retries = Retry(total=0)
-            # http = PoolManager(retries=retries)
-
             try:
-                # http.request("POST", url, headers={'Content-Type': 'application/json'}, body=encrypted_json)
                 urllib3.PoolManager().request("POST", url, headers={'Content-Type': 'application/json'},
                                               body=encrypted_json)
             except Exception as e:
@@ -194,22 +190,16 @@ def retry_push_result(encrypted_json):
     max_backoff = 180
     backoff_factor = 2.0
 
-    # retries = Retry(total=0)
-    # http = PoolManager(retries=retries)
-
     while True:
         try:
             secret = k8s.get_client().read_namespaced_secret(input_context_secret, runner_namespace)
             callback_url = base64.b64decode(secret.data["url"])
             url = base64.b64decode(callback_url).decode("UTF-8")
-
-            # response = http.request("POST", url, headers={'Content-Type': 'application/json'}, body=encrypted_json)
-
             response = urllib3.PoolManager().request("POST", url, headers={'Content-Type': 'application/json'},
                                                      body=encrypted_json)
             return response
         except Exception as e:
-            logger.warning("Cannot finish retried Callback request: {e}. Retrying in {retry_delay} seconds...")
+            logger.warning(f"Cannot finish retried Callback request: {e}. Retrying in {retry_delay} seconds...")
             time.sleep(retry_delay)
 
             retry_delay *= backoff_factor
