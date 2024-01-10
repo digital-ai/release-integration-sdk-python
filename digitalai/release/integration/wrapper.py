@@ -166,8 +166,8 @@ def update_output_context(output_context: OutputContext):
         if callback_url:
             logger.debug("Pushing result using HTTP")
             url = base64.b64decode(callback_url).decode("UTF-8")
-            retries = Retry(connect=0, read=0, redirect=0, status=0)
-            http = urllib3.PoolManager(retries=retries)
+            retries = Retry(total=0)
+            http = PoolManager(retries=retries)
 
             try:
                 http.request("POST", url, headers={'Content-Type': 'application/json'}, body=encrypted_json)
@@ -192,7 +192,7 @@ def retry_push_result(encrypted_json):
     max_backoff = 180
     backoff_factor = 2.0
 
-    retries = Retry(connect=0, read=0, redirect=0, status=0)
+    retries = Retry(total=0)
     http = PoolManager(retries=retries)
 
     while True:
