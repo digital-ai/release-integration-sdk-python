@@ -12,6 +12,8 @@ import time
 
 import requests
 import urllib3
+from urllib3.util.retry import Retry
+from urllib3 import PoolManager
 
 from digitalai.release.integration import k8s, watcher
 from .base_task import BaseTask
@@ -181,9 +183,12 @@ def retry_push_result(encrypted_json):
     Function keeps retrying to push encrypted data to the callback URL with exponential backoff.
     Callback URL is re-fetched from input context secret due to probable remote-runner port change.
     """
-    retry_delay = 1  # Start with 1 second
+    retry_delay = 1
     max_backoff = 180  # Maximum backoff of 3 minutes (180 seconds)
     backoff_factor = 2.0
+
+    retries = Retry(connect=0, read=0, redirect=0, status=0)
+    http = PoolManager(retries=retries)
 
     while True:
         try:
@@ -191,8 +196,7 @@ def retry_push_result(encrypted_json):
             callback_url = base64.b64decode(secret.data["url"])
             url = base64.b64decode(callback_url).decode("UTF-8")
 
-            logger.debug("Retrying to push result using HTTP")
-            response = urllib3.PoolManager().request("POST", url, headers={'Content-Type': 'application/json'}, body=encrypted_json)
+            response = http.request("POST", url, headers={'Content-Type': 'application/json'}, body=encrypted_json)
             return response  # Success, exit the loop
         except Exception as e:
             logger.warning(f"Cannot finish retried Callback request: {e}. Retrying in {retry_delay} seconds...", exc_info=True)
