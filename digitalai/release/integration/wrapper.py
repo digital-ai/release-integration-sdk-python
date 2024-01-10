@@ -8,6 +8,7 @@ import logging.config
 import os
 import signal
 import sys
+import time
 
 import requests
 import urllib3
@@ -141,6 +142,7 @@ def update_output_context(output_context: OutputContext):
     logger.debug("Creating output context file")
     output_content = json.dumps(output_context.to_dict())
     encrypted_json = get_encryptor().encrypt(output_content)
+    push_retry = False
     try:
         if output_context_file:
             logger.debug("Writing output context to file")
@@ -151,15 +153,56 @@ def update_output_context(output_context: OutputContext):
             namespace, name, key = k8s.split_secret_resource_data(result_secret_key)
             secret = k8s.get_client().read_namespaced_secret(name, namespace)
             secret.data[key] = encrypted_json
-            k8s.get_client().replace_namespaced_secret(name, namespace, secret)
+            try:
+                k8s.get_client().replace_namespaced_secret(name, namespace, secret)
+            except Exception as e:
+                if "data: Too long" in str(e):
+                    logger.warning("Cannot update Result Secret.", exc_info=True)
+                    push_retry = True
+                else:
+                    raise
         if callback_url:
             logger.debug("Pushing result using HTTP")
             url = base64.b64decode(callback_url).decode("UTF-8")
-            urllib3.PoolManager().request("POST", url, headers={'Content-Type': 'application/json'},
-                                          body=encrypted_json)
+            try:
+                urllib3.PoolManager().request("POST", url, headers={'Content-Type': 'application/json'}, body=encrypted_json)
+            except Exception as e:
+                logger.warning("Cannot finish Callback request.", exc_info=True)
+                if push_retry:
+                    logger.info("Retry flag was set on Callback request, retrying request")
+                    retry_push_result(encrypted_json)
 
     except Exception:
         logger.error("Unexpected error occurred.", exc_info=True)
+
+
+def retry_push_result(encrypted_json):
+    """
+    Function keeps retrying to push encrypted data to the callback URL with exponential backoff.
+    Callback URL is re-fetched from input context secret due to probable remote-runner port change.
+    """
+    retry_delay = 1  # Start with 1 second
+    max_backoff = 180  # Maximum backoff of 3 minutes (180 seconds)
+    backoff_factor = 2.0
+
+    while True:
+        try:
+            secret = k8s.get_client().read_namespaced_secret(input_context_secret, runner_namespace)
+            callback_url = base64.b64decode(secret.data["url"])
+            url = base64.b64decode(callback_url).decode("UTF-8")
+
+            logger.debug("Retrying to push result using HTTP")
+            response = urllib3.PoolManager().request("POST", url, headers={'Content-Type': 'application/json'}, body=encrypted_json)
+            return response  # Success, exit the loop
+        except Exception as e:
+            logger.warning(f"Cannot finish retried Callback request: {e}. Retrying in {retry_delay} seconds...", exc_info=True)
+            time.sleep(retry_delay)
+
+            # Increase the delay for the next retry
+            retry_delay *= backoff_factor
+            if retry_delay > max_backoff:
+                logger.warning("Maximum retry backoff reached, aborting with error.")
+                raise
 
 
 def execute_task(task_object: BaseTask):
@@ -201,7 +244,7 @@ def run():
         class_file_path = find_class_file(os.getcwd(), task_class_name)
         if not class_file_path:
             raise ValueError(f"Could not find the {task_class_name} class")
-        module_name = class_file_path.replace(os.getcwd()+os.sep,'')
+        module_name = class_file_path.replace(os.getcwd() + os.sep, '')
         module_name = module_name.replace(".py", "").replace(os.sep, ".")
         module = importlib.import_module(module_name)
         task_class = getattr(module, task_class_name)
@@ -218,7 +261,6 @@ def run():
     finally:
         if execution_mode == "daemon":
             watcher.start_input_context_watcher(run)
-
 
 
 if __name__ == "__main__":
