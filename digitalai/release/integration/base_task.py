@@ -78,6 +78,14 @@ class BaseTask(ABC):
         """
         if not name:
             raise ValueError("Output property name cannot be empty")
+
+        accepted_data_types = (str, int, list, dict, bool)
+
+        if value and not isinstance(value, accepted_data_types):
+            raise ValueError(
+                f"Invalid data type for value '{value}' in name '{name}' in set_output_property. Accepted data types "
+                f"are: str, int, list, dict, bool")
+
         self.output_context.output_properties[name] = value
 
     def set_exit_code(self, value) -> None:
