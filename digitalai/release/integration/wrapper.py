@@ -12,8 +12,6 @@ import time
 
 import requests
 import urllib3
-from urllib3.util.retry import Retry
-from urllib3 import PoolManager
 
 from digitalai.release.integration import k8s, watcher
 from .base_task import BaseTask
