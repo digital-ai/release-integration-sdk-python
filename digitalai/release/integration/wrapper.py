@@ -170,8 +170,8 @@ def update_output_context(output_context: OutputContext):
             except Exception as e:
                 if push_retry:
                     logger.error("Cannot finish Callback request.", exc_info=True)
-                    logger.info("Retry flag was set on Callback request, retrying request")
-                    retry_push_result(encrypted_json)
+                    logger.info("Result is too big for secret and Callback request failed, retrying Callback request until successful...")
+                    retry_push_result_infinitely(encrypted_json)
                 else:
                     raise
 
@@ -179,11 +179,10 @@ def update_output_context(output_context: OutputContext):
         logger.error("Unexpected error occurred.", exc_info=True)
 
 
-def retry_push_result(encrypted_json):
+def retry_push_result_infinitely(encrypted_json):
     """
-    Keeps retrying to push encrypted data to the callback URL with exponential backoff.
+    Keeps retrying to push encrypted data to the callback URL with exponential backoff, capping at 3 minutes.
     Callback URL is re-fetched from input context secret due to possible remote-runner port change.
-    If the push is unsuccessful after max backoff of 3 minutes, it will exit with error
     """
     retry_delay = 1
     max_backoff = 180
@@ -200,11 +199,7 @@ def retry_push_result(encrypted_json):
         except Exception as e:
             logger.warning(f"Cannot finish retried Callback request: {e}. Retrying in {retry_delay} seconds...")
             time.sleep(retry_delay)
-
-            retry_delay *= backoff_factor
-            if retry_delay > max_backoff:
-                logger.warning("Maximum retry backoff reached, aborting with error.")
-                raise
+            retry_delay = min(retry_delay * backoff_factor, max_backoff)
 
 
 def execute_task(task_object: BaseTask):
