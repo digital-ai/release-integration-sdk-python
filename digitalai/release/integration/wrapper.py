@@ -152,11 +152,11 @@ def update_output_context(output_context: OutputContext):
             logger.debug("Writing output context to secret")
             if len(encrypted_json) >= size_of_1Mb:
                 logger.warning("Result size exceeds 1Mb and is too big to store in secret")
-                return
-            namespace, name, key = k8s.split_secret_resource_data(result_secret_key)
-            secret = k8s.get_client().read_namespaced_secret(name, namespace)
-            secret.data[key] = encrypted_json
-            k8s.get_client().replace_namespaced_secret(name, namespace, secret)
+            else:
+                namespace, name, key = k8s.split_secret_resource_data(result_secret_key)
+                secret = k8s.get_client().read_namespaced_secret(name, namespace)
+                secret.data[key] = encrypted_json
+                k8s.get_client().replace_namespaced_secret(name, namespace, secret)
         if callback_url:
             logger.debug("Pushing result using HTTP")
             url = base64.b64decode(callback_url).decode("UTF-8")
