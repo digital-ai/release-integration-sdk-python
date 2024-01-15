@@ -40,6 +40,7 @@ execution_mode: str = os.getenv('EXECUTOR_EXECUTION_MODE', '')
 
 input_context: InputContext = None
 
+size_of_1Mb = 1024 * 1024
 
 # Create the encryptor
 def get_encryptor():
@@ -142,7 +143,6 @@ def update_output_context(output_context: OutputContext):
     logger.debug("Creating output context file")
     output_content = json.dumps(output_context.to_dict())
     encrypted_json = get_encryptor().encrypt(output_content)
-    push_retry = False
     try:
         if output_context_file:
             logger.debug("Writing output context to file")
@@ -150,27 +150,22 @@ def update_output_context(output_context: OutputContext):
                 data_output.write(encrypted_json)
         if result_secret_key:
             logger.debug("Writing output context to secret")
+            if len(encrypted_json) >= size_of_1Mb:
+                raise ValueError("result size exceeds 1Mb and is too big to store in secret")
             namespace, name, key = k8s.split_secret_resource_data(result_secret_key)
             secret = k8s.get_client().read_namespaced_secret(name, namespace)
             secret.data[key] = encrypted_json
-            try:
-                k8s.get_client().replace_namespaced_secret(name, namespace, secret)
-            except Exception as e:
-                if "data: Too long" in str(e):
-                    logger.warning("Cannot update Result Secret.", exc_info=True)
-                    push_retry = True
-                else:
-                    raise
+            k8s.get_client().replace_namespaced_secret(name, namespace, secret)
         if callback_url:
             logger.debug("Pushing result using HTTP")
             url = base64.b64decode(callback_url).decode("UTF-8")
             try:
                 urllib3.PoolManager().request("POST", url, headers={'Content-Type': 'application/json'},
                                               body=encrypted_json)
-            except Exception as e:
-                if push_retry:
+            except Exception:
+                if should_retry_callback_request(encrypted_json):
                     logger.error("Cannot finish Callback request.", exc_info=True)
-                    logger.info("Result is too big for secret and Callback request failed, retrying Callback request until successful...")
+                    logger.info("Retry flag was set on Callback request, retrying until successful...")
                     retry_push_result_infinitely(encrypted_json)
                 else:
                     raise
@@ -200,6 +195,15 @@ def retry_push_result_infinitely(encrypted_json):
             logger.warning(f"Cannot finish retried Callback request: {e}. Retrying in {retry_delay} seconds...")
             time.sleep(retry_delay)
             retry_delay = min(retry_delay * backoff_factor, max_backoff)
+
+
+def should_retry_callback_request(encrypted_data):
+    """
+    Checks if callback request should be retried on failure.
+    It should be retried when result is too big for Secret and Output File handler is not used.
+    """
+    output_location = os.getenv(input_context_file, "")
+    return len(encrypted_data) >= size_of_1Mb and len(output_location) == 0
 
 
 def execute_task(task_object: BaseTask):
