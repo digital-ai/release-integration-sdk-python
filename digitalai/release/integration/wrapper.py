@@ -203,8 +203,7 @@ def should_retry_callback_request(encrypted_data):
     Checks if callback request should be retried on failure.
     It should be retried when result is too big for Secret and Output File handler is not used.
     """
-    output_location = os.getenv(input_context_file, "")
-    return len(encrypted_data) >= size_of_1Mb and len(output_location) == 0
+    return len(encrypted_data) >= size_of_1Mb and len(input_context_file) == 0
 
 
 def execute_task(task_object: BaseTask):
