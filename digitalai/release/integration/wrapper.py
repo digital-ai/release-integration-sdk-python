@@ -186,11 +186,15 @@ def retry_push_result_infinitely(encrypted_json):
 
     while True:
         try:
+            # If we can't read the secret, we should fail fast
             secret = k8s.get_client().read_namespaced_secret(input_context_secret, runner_namespace)
+        except Exception:
+            raise
+
+        try:
             callback_url = base64.b64decode(secret.data["url"])
             url = base64.b64decode(callback_url).decode("UTF-8")
-            response = urllib3.PoolManager().request("POST", url, headers={'Content-Type': 'application/json'},
-                                                     body=encrypted_json)
+            response = urllib3.PoolManager().request("POST", url, headers={'Content-Type': 'application/json'}, body=encrypted_json)
             return response
         except Exception as e:
             logger.warning(f"Cannot finish retried Callback request: {e}. Retrying in {retry_delay} seconds...")
