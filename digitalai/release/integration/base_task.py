@@ -6,7 +6,7 @@ from typing import Any, Dict
 from .input_context import AutomatedTaskAsUserContext
 from .output_context import OutputContext
 from .exceptions import AbortException
-from .release_api_client import ReleaseAPIClient
+from digitalai.release.release_api_client import ReleaseAPIClient
 
 logger = logging.getLogger("Digitalai")
 

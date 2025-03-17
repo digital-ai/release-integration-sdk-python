@@ -1,6 +1,6 @@
 # Digital.ai Release Python SDK
 
-The **Digital.ai Release Python SDK** (`digitalai-release-sdk`) provides a set of tools for developers to create container-based plugins with Digital.ai Release. It simplifies plugin creation by offering built-in methods to interact with the execution environment.
+The **Digital.ai Release Python SDK** (`digitalai-release-sdk`) provides a set of tools for developers to create container-based integration with Digital.ai Release. It simplifies integration creation by offering built-in functions to interact with the execution environment.
 
 ## Features
 - Define custom tasks using the `BaseTask` abstract class.

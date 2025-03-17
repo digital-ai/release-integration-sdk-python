@@ -1,6 +1,6 @@
 import unittest
 
-from digitalai.release.integration.release_api_client import ReleaseAPIClient
+from digitalai.release.release_api_client import ReleaseAPIClient
 
 
 class TestReleaseAPIClient(unittest.TestCase):
