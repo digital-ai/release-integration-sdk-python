@@ -4,6 +4,9 @@ The Digital.ai Release Python SDK (digitalai-release-sdk) is a set of tools that
 
 Developers can use the `BaseTask` abstract class as a starting point to define their custom tasks and take advantage of the other methods and attributes provided by the SDK to interact with the task execution environment.
 
+## Release Notes  
+See the full [Changelog](CHANGELOG.md) for details on new features and bug fixes.
+
 ## Installation
 
 ```shell script
@@ -35,4 +38,4 @@ class Hello(BaseTask):
  ```
 
 ## Documentation
-Read more about Digital.ai Release Python SDK [here](https://digital.ai/)
+Read more about Digital.ai Release Python SDK [here](https://docs.digital.ai/release/docs/next/category/python-sdk)
