@@ -7,13 +7,12 @@ packages = ["digitalai"]
 
 [project]
 name = "digitalai_release_sdk"
-version = "25.1.0b2"
+version = "25.1.0b3"
 authors = [
   { name="Digital.ai", email="pypi-devops@digital.ai" },
 ]
 description = "Digital.ai Release SDK"
 readme = "README.md"
-changelog = "CHANGELOG.md"
 requires-python = ">=3.8"
 dependencies = [
     'dataclasses-json==0.6.7',
