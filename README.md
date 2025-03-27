@@ -44,13 +44,14 @@ class Hello(BaseTask):
 ```
 
 ## Changelog
-### Version 25.1.0b3
+### Version 25.1.0
 
 #### 🚨 Breaking Changes
 - **Removed `get_default_api_client()`** from the `BaseTask` class.
 - **Removed `digitalai.release.v1` package**, which contained OpenAPI-generated stubs for Release API functions.
   - These stubs were difficult to use and had several non-functioning methods.
   - A new, simplified API client replaces them for better usability and reliability.
+  - The removed package will be released as a separate library in the future.
 
 #### ✨ New Features
 - **Introduced `get_release_api_client()`** in the `BaseTask` class as a replacement for `get_default_api_client()`.
@@ -63,5 +64,5 @@ class Hello(BaseTask):
 - **Bundled `requests` library** to ensure seamless HTTP request handling.
 
 ---
-**For more details, visit the [official documentation](https://docs.digital.ai/release/docs/next/category/python-sdk).**
+**For more details, visit the [official documentation](https://docs.digital.ai/release/docs/category/python-sdk).**
 

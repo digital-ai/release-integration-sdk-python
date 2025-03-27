@@ -42,4 +42,4 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://digital.ai/"
-Documentation = "https://docs.digital.ai/release/docs/next/category/python-sdk"
+Documentation = "https://docs.digital.ai/release/docs/category/python-sdk"
