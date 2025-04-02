@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build]
 exclude = [
-  "digitalai/release/v1/docs/*"
+  ".gitignore", "tests/*", ".github/*"
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -12,25 +12,34 @@ packages = ["digitalai"]
 
 [project]
 name = "digitalai_release_sdk"
-version = "24.1.0"
+version = "25.1.0"
 authors = [
   { name="Digital.ai", email="pypi-devops@digital.ai" },
 ]
 description = "Digital.ai Release SDK"
 readme = "README.md"
-requires-python = ">=3.7"
+requires-python = ">=3.8"
 dependencies = [
-    'dataclasses-json==0.5.7',
-    'pycryptodomex==3.16.0',
-    'python_dateutil >= 2.5.3',
-    'urllib3 >= 1.25.3',
-    'kubernetes==25.3.0'
+    'dataclasses-json==0.6.7',
+    'pycryptodomex==3.21.0',
+    'python-dateutil==2.9.0',
+    'requests==2.32.3',
+    'kubernetes==32.0.1'
 ]
 classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
+    "Operating System :: OS Independent"
 ]
 
 [project.urls]
-"Homepage" = "https://digital.ai/"
+Homepage = "https://digital.ai/"
+Documentation = "https://docs.digital.ai/release/docs/category/python-sdk"

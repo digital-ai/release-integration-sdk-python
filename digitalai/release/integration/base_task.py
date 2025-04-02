@@ -3,13 +3,10 @@ import sys
 from abc import ABC, abstractmethod
 from typing import Any, Dict
 
-from digitalai.release.v1.configuration import Configuration
-
-from digitalai.release.v1.api_client import ApiClient
-
-from .input_context import AutomatedTaskAsUserContext, ReleaseContext
+from .input_context import AutomatedTaskAsUserContext
 from .output_context import OutputContext
 from .exceptions import AbortException
+from digitalai.release.release_api_client import ReleaseAPIClient
 
 logger = logging.getLogger("Digitalai")
 
@@ -18,6 +15,14 @@ class BaseTask(ABC):
     """
     An abstract base class representing a task that can be executed.
     """
+
+    def __init__(self):
+        self.task_id = None
+        self.release_context = None
+        self.release_server_url = None
+        self.input_properties = None
+        self.output_context = None
+
     def execute_task(self) -> None:
         """
         Executes the task by calling the execute method. If an AbortException is raised during execution,
@@ -30,8 +35,8 @@ class BaseTask(ABC):
         except AbortException:
             logger.debug("Abort requested")
             self.set_exit_code(1)
-            sys.exit(1)
             self.set_error_message("Abort requested")
+            sys.exit(1)
         except Exception as e:
             logger.error("Unexpected error occurred.", exc_info=True)
             self.set_exit_code(1)
@@ -130,21 +135,6 @@ class BaseTask(ABC):
         """
         return self.release_context.automated_task_as_user
 
-    def get_default_api_client(self) -> ApiClient:
-        """
-        Returns an ApiClient object with default configuration based on the task.
-        """
-        if not all([self.get_release_server_url(), self.get_task_user().username, self.get_task_user().password]):
-            raise ValueError("Cannot connect to Release API without server URL, username, or password. "
-                             "Make sure that the 'Run as user' property is set on the release.")
-
-        configuration = Configuration(
-            host=self.get_release_server_url(),
-            username=self.get_task_user().username,
-            password=self.get_task_user().password)
-
-        return ApiClient(configuration)
-
     def get_release_id(self) -> str:
         """
         Returns the Release ID of the task
@@ -156,6 +146,29 @@ class BaseTask(ABC):
         Returns the Task ID of the task
         """
         return self.task_id
+
+    def get_release_api_client(self) -> ReleaseAPIClient:
+        """
+        Returns a ReleaseAPIClient object with default configuration based on the task.
+        """
+        self._validate_api_credentials()
+        return ReleaseAPIClient(self.get_release_server_url(),
+                                self.get_task_user().username,
+                                self.get_task_user().password)
+
+    def _validate_api_credentials(self) -> None:
+        """
+        Validates that the necessary credentials are available for connecting to the Release API.
+        """
+        if not all([
+            self.get_release_server_url(),
+            self.get_task_user().username,
+            self.get_task_user().password
+        ]):
+            raise ValueError(
+                "Cannot connect to Release API without server URL, username, or password. "
+                "Make sure that the 'Run as user' property is set on the release."
+            )
 
 
 
