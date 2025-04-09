@@ -116,6 +116,15 @@ This pattern should be used for all API clients, such as `TemplateApi`, `TaskApi
 
 ---
 
-## Documentation
-Read more about Digital.ai Release Python SDK [here](https://digital.ai/)
+## 🔗 Related Resources
+
+- 🧪 **Python Template Project**: [release-integration-template-python](https://github.com/digital-ai/release-integration-template-python)  
+  A starting point for building custom integrations using Digital.ai Release and Python.
+
+- 📘 **Official Documentation**: [Digital.ai Release Python SDK Docs](https://docs.digital.ai/release/docs/category/python-sdk)  
+  Comprehensive guide to using the Python SDK and building custom tasks.
+
+- 📦 **Digital.ai Release Python SDK**: [digitalai-release-sdk on PyPI](https://pypi.org/project/digitalai-release-sdk/)  
+  The official SDK package for integrating with Digital.ai Release.
+
 
