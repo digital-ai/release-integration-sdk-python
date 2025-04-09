@@ -64,5 +64,58 @@ class Hello(BaseTask):
 - **Bundled `requests` library** to ensure seamless HTTP request handling.
 
 ---
-**For more details, visit the [official documentation](https://docs.digital.ai/release/docs/category/python-sdk).**
+## 🔁 Upgrading from `digitalai-release-sdk` 24.1.0 or 23.3.0 to 25.1.0
+
+With the release of **digitalai-release-sdk 25.1.0**, the API stubs have been separated into a standalone package. 
+
+👉 [`digitalai-release-api-stubs`](https://pypi.org/project/digitalai-release-api-stubs/)
+
+To upgrade your project, follow these steps:
+
+### Step 1: Install the API Stubs Package
+
+You must explicitly install the new API stubs package:
+
+```bash
+pip install digitalai-release-api-stubs==25.1.0
+```
+
+Or, add it to your `requirements.txt` as needed.
+
+---
+
+### Step 2: Update Your Code
+
+In previous versions, API clients were created like this:
+
+```python
+# Old code (pre-25.1.0)
+configuration_api = ConfigurationApi(self.get_default_api_client())
+```
+
+In version **25.1.0**, use the following approach:
+
+```python
+# New code (25.1.0)
+
+# Create a configuration object
+configuration = Configuration(
+    host=self.get_release_server_url(),
+    username=self.get_task_user().username,
+    password=self.get_task_user().password
+)
+
+# Instantiate the API client using the configuration
+apiclient = ApiClient(configuration)
+
+# Create the Configuration API client
+configuration_api = ConfigurationApi(apiclient)
+```
+
+This pattern should be used for all API clients, such as `TemplateApi`, `TaskApi`, etc.
+
+---
+
+## Documentation
+Read more about Digital.ai Release Python SDK [here](https://digital.ai/)
 
