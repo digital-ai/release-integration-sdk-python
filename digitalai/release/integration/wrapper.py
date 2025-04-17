@@ -29,13 +29,16 @@ sys.stderr = masked_std_err
 
 # input and output context file location
 input_context_file: str = os.getenv('INPUT_LOCATION', '')
+print("Input context file : ", input_context_file)
 output_context_file: str = os.getenv('OUTPUT_LOCATION', '')
 base64_session_key: str = os.getenv('SESSION_KEY', '')
 release_server_url: str = os.getenv('RELEASE_URL', '')
 callback_url: str = os.getenv('CALLBACK_URL', '')
 input_context_secret: str = os.getenv('INPUT_CONTEXT_SECRET', '')
+print("Input context secret : ", input_context_secret)
 result_secret_key: str = os.getenv('RESULT_SECRET_NAME', '')
 runner_namespace: str = os.getenv('RUNNER_NAMESPACE', '')
+print("Runner namespace : ", runner_namespace)
 execution_mode: str = os.getenv('EXECUTOR_EXECUTION_MODE', '')
 
 input_context: InputContext = None
@@ -97,11 +100,15 @@ def get_task_details():
 
         global base64_session_key, callback_url
         base64_session_key = base64.b64decode(secret.data["session-key"])
+        print("Session key : ", base64_session_key)
         callback_url = base64.b64decode(secret.data["url"])
+        print("Callback URL : ", callback_url)
 
         input_content = secret.data["input"]
+        print("Input content : ", input_content)
         if not input_content or len(input_content) == 0:
             fetch_url_base64 = secret.data["fetchUrl"]
+            print("Fetch URL : ", fetch_url_base64)
             if not fetch_url_base64 or len(fetch_url_base64) == 0:
                 raise ValueError("Cannot find fetch URL for task")
 
@@ -110,6 +117,7 @@ def get_task_details():
             try:
                 response = requests.get(fetch_url)
                 response.raise_for_status()
+                print("Response : ", response.content)
             except requests.exceptions.RequestException as e:
                 logger.error("Failed to fetch data.", exc_info=True)
                 raise e
