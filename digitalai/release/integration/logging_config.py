@@ -1,4 +1,5 @@
 import sys
+import logging.config
 LOGGING_CONFIG = ({
     'version': 1,
     'disable_existing_loggers': False,
@@ -34,3 +35,5 @@ LOGGING_CONFIG = ({
         'propagate': False
     }
 })
+logging.config.dictConfig(LOGGING_CONFIG)
+logger = logging.getLogger("Digitalai")

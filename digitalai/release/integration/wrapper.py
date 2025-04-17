@@ -4,7 +4,6 @@ import ast
 import base64
 import importlib
 import json
-import logging.config
 import os
 import signal
 import sys
@@ -20,6 +19,7 @@ from .job_data_encryptor import AESJobDataEncryptor, NoOpJobDataEncryptor
 from .logging_config import LOGGING_CONFIG
 from .masked_io import MaskedIO
 from .output_context import OutputContext
+from .logging_config import logger
 
 # Mask the standard output and error streams by replacing them with MaskedIO objects.
 masked_std_out: MaskedIO = MaskedIO(sys.stdout)
@@ -49,13 +49,6 @@ def get_encryptor():
     else:
         encryptor = NoOpJobDataEncryptor()
     return encryptor
-
-
-# Set up logging
-logging.config.dictConfig(LOGGING_CONFIG)
-
-# Get the logger
-logger = logging.getLogger("Digitalai")
 
 # Initialize the global task object
 dai_task_object: BaseTask = None
