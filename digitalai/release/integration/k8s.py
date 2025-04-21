@@ -1,7 +1,8 @@
 import threading
-import warnings
+
 from kubernetes import client, config
 from kubernetes.client import CoreV1Api
+from .logger import dai_logger
 
 kubernetes_client: CoreV1Api = None
 lock = threading.Lock()
@@ -13,8 +14,19 @@ def get_client():
     if not kubernetes_client:
         with lock:
             if not kubernetes_client:
-                warnings.filterwarnings("ignore", message=".*kube_config_path not provided.*")
-                config.load_config()
+                try:
+                    dai_logger.info("Attempting to load in-cluster config")
+                    config.load_incluster_config()
+                    dai_logger.info("Successfully loaded in-cluster config")
+                except Exception:
+                    dai_logger.warning("In-cluster config failed, attempting default load_config")
+                    try:
+                        config.load_config()
+                        dai_logger.info("Successfully loaded config using load_config")
+                    except Exception as e:
+                        dai_logger.error(f"Failed to load any config", exc_info=True)
+                        raise RuntimeError("Could not configure kubernetes client") from e
+
                 kubernetes_client = client.CoreV1Api()
 
     return kubernetes_client
