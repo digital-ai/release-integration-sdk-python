@@ -10,14 +10,20 @@ from digitalai.release.v1.api_client import ApiClient
 from .input_context import AutomatedTaskAsUserContext, ReleaseContext
 from .output_context import OutputContext
 from .exceptions import AbortException
-
-logger = logging.getLogger("Digitalai")
+from .logger import dai_logger
 
 
 class BaseTask(ABC):
     """
     An abstract base class representing a task that can be executed.
     """
+    def __init__(self):
+        self.task_id = None
+        self.release_context = None
+        self.release_server_url = None
+        self.input_properties = None
+        self.output_context = None
+
     def execute_task(self) -> None:
         """
         Executes the task by calling the execute method. If an AbortException is raised during execution,
@@ -28,12 +34,13 @@ class BaseTask(ABC):
             self.output_context = OutputContext(0, "", {}, [])
             self.execute()
         except AbortException:
-            logger.debug("Abort requested")
+            dai_logger.info("Abort requested")
             self.set_exit_code(1)
-            sys.exit(1)
             self.set_error_message("Abort requested")
+            sys.exit(1)
+
         except Exception as e:
-            logger.error("Unexpected error occurred.", exc_info=True)
+            dai_logger.error("Unexpected error occurred.", exc_info=True)
             self.set_exit_code(1)
             self.set_error_message(str(e))
 
@@ -104,13 +111,13 @@ class BaseTask(ABC):
         """
         Logs a comment of the task.
         """
-        logger.debug(f"##[start: comment]{comment}##[end: comment]")
+        dai_logger.debug(f"##[start: comment]{comment}##[end: comment]")
 
     def set_status_line(self, status_line: str) -> None:
         """
         Set the status of the task.
         """
-        logger.debug(f"##[start: status]{status_line}##[end: status]")
+        dai_logger.debug(f"##[start: status]{status_line}##[end: status]")
 
     def add_reporting_record(self, reporting_record: Any) -> None:
         """
