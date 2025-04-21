@@ -35,4 +35,4 @@ class Hello(BaseTask):
  ```
 
 ## Documentation
-Read more about Digital.ai Release Python SDK [here](https://digital.ai/)
+Read more about Digital.ai Release Python SDK [here](https://docs.digital.ai/release/docs/category/python-sdk)
