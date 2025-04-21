@@ -1,5 +1,5 @@
 import threading
-
+import warnings
 from kubernetes import client, config
 from kubernetes.client import CoreV1Api
 
@@ -13,6 +13,7 @@ def get_client():
     if not kubernetes_client:
         with lock:
             if not kubernetes_client:
+                warnings.filterwarnings("ignore", message=".*kube_config_path not provided.*")
                 config.load_config()
                 kubernetes_client = client.CoreV1Api()
 
