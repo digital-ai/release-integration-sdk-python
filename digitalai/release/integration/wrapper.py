@@ -86,8 +86,9 @@ def get_task_details():
             input_content = data_input.read()
         dai_logger.info("Successfully loaded input context from file")
     else:
+        k8s_client = k8s.get_client()
         dai_logger.info("Reading input context from secret")
-        secret = k8s.get_client().read_namespaced_secret(input_context_secret, runner_namespace)
+        secret =k8s_client.read_namespaced_secret(input_context_secret, runner_namespace)
         dai_logger.info("Successfully loaded input context from secret")
         global base64_session_key, callback_url
         base64_session_key = base64.b64decode(secret.data["session-key"])
