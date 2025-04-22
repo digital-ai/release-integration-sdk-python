@@ -1,5 +1,5 @@
 from digitalai.release.integration import BaseTask
-
+from digitalai.release.integration import dai_logger
 
 class Hello(BaseTask):
     """
@@ -12,10 +12,10 @@ class Hello(BaseTask):
 
         greeting = f"Hello {name}"
 
-        print(f"get_release_server_url() : {self.get_release_server_url()}")
-        print(f"get_task_user() : {self.get_task_user()}")
-        print(f"get_release_id() : {self.get_release_id()}")
-        print(f"get_task_id() : {self.get_task_id()}")
+        dai_logger.info(f"get_release_server_url() : {self.get_release_server_url()}")
+        dai_logger.info(f"get_task_user() : {self.get_task_user()}")
+        dai_logger.info(f"get_release_id() : {self.get_release_id()}")
+        dai_logger.info(f"get_task_id() : {self.get_task_id()}")
 
         # Add to the comment section of the task in the UI
         self.add_comment(greeting)

@@ -6,9 +6,8 @@ from typing import Any, Dict
 from .input_context import AutomatedTaskAsUserContext
 from .output_context import OutputContext
 from .exceptions import AbortException
+from .logger import dai_logger
 from digitalai.release.release_api_client import ReleaseAPIClient
-
-logger = logging.getLogger("Digitalai")
 
 
 class BaseTask(ABC):
@@ -33,12 +32,12 @@ class BaseTask(ABC):
             self.output_context = OutputContext(0, "", {}, [])
             self.execute()
         except AbortException:
-            logger.debug("Abort requested")
+            dai_logger.info("Abort requested")
             self.set_exit_code(1)
             self.set_error_message("Abort requested")
             sys.exit(1)
         except Exception as e:
-            logger.error("Unexpected error occurred.", exc_info=True)
+            dai_logger.error("Unexpected error occurred", exc_info=True)
             self.set_exit_code(1)
             self.set_error_message(str(e))
 
@@ -109,13 +108,13 @@ class BaseTask(ABC):
         """
         Logs a comment of the task.
         """
-        logger.debug(f"##[start: comment]{comment}##[end: comment]")
+        dai_logger.debug(f"##[start: comment]{comment}##[end: comment]")
 
     def set_status_line(self, status_line: str) -> None:
         """
         Set the status of the task.
         """
-        logger.debug(f"##[start: status]{status_line}##[end: status]")
+        dai_logger.debug(f"##[start: status]{status_line}##[end: status]")
 
     def add_reporting_record(self, reporting_record: Any) -> None:
         """

@@ -4,7 +4,6 @@ import ast
 import base64
 import importlib
 import json
-import logging.config
 import os
 import signal
 import sys
@@ -17,7 +16,7 @@ from digitalai.release.integration import k8s, watcher
 from .base_task import BaseTask
 from .input_context import InputContext
 from .job_data_encryptor import AESJobDataEncryptor, NoOpJobDataEncryptor
-from .logging_config import LOGGING_CONFIG
+from .logger import dai_logger
 from .masked_io import MaskedIO
 from .output_context import OutputContext
 
@@ -51,12 +50,6 @@ def get_encryptor():
     return encryptor
 
 
-# Set up logging
-logging.config.dictConfig(LOGGING_CONFIG)
-
-# Get the logger
-logger = logging.getLogger("Digitalai")
-
 # Initialize the global task object
 dai_task_object: BaseTask = None
 
@@ -66,13 +59,13 @@ def abort_handler(signum, frame):
     This function handles the abort request by calling the abort method on the global task object, if it exists.
     If the task object does not exist, it logs a message and exits with a status code of 1.
     """
-    logger.debug("Received SIGTERM to gracefully stop the process")
+    dai_logger.info("Received SIGTERM to gracefully stop the process")
     global dai_task_object
 
     if dai_task_object:
         dai_task_object.abort()
     else:
-        logger.debug("Abort requested")
+        dai_logger.info("Abort requested")
         sys.exit(1)
 
 
@@ -86,15 +79,17 @@ def get_task_details():
     and parsing the JSON data into an InputContext object. Then, set the secrets for the masked standard output
     and error streams, build the task properties from the InputContext object.
     """
-    logger.debug("Preparing for task properties.")
+    dai_logger.info("Preparing for task properties")
     if input_context_file:
-        logger.debug("Reading input context from file")
+        dai_logger.info("Reading input context from file")
         with open(input_context_file) as data_input:
             input_content = data_input.read()
+        dai_logger.info("Successfully loaded input context from file")
     else:
-        logger.debug("Reading input context from secret")
-        secret = k8s.get_client().read_namespaced_secret(input_context_secret, runner_namespace)
-
+        k8s_client = k8s.get_client()
+        dai_logger.info("Reading input context from secret")
+        secret =k8s_client.read_namespaced_secret(input_context_secret, runner_namespace)
+        dai_logger.info("Successfully loaded input context from secret")
         global base64_session_key, callback_url
         base64_session_key = base64.b64decode(secret.data["session-key"])
         callback_url = base64.b64decode(secret.data["url"])
@@ -111,7 +106,7 @@ def get_task_details():
                 response = requests.get(fetch_url)
                 response.raise_for_status()
             except requests.exceptions.RequestException as e:
-                logger.error("Failed to fetch data.", exc_info=True)
+                dai_logger.error("Failed to fetch data.", exc_info=True)
                 raise e
 
             if response.status_code != 200:
@@ -122,6 +117,7 @@ def get_task_details():
             input_content = base64.b64decode(input_content)
 
     decrypted_json = get_encryptor().decrypt(input_content)
+    dai_logger.info("Successfully decrypted input context")
     global input_context
     input_context = InputContext.from_dict(json.loads(decrypted_json))
 
@@ -140,39 +136,38 @@ def update_output_context(output_context: OutputContext):
     dictionary to a JSON string, encrypting the string using the encryptor, and writing the encrypted string
     to the output context file or secret and pushing to callback URL.
     """
-    logger.debug("Creating output context file")
     output_content = json.dumps(output_context.to_dict())
     encrypted_json = get_encryptor().encrypt(output_content)
     try:
         if output_context_file:
-            logger.debug("Writing output context to file")
+            dai_logger.info("Writing output context to file")
             with open(output_context_file, "w") as data_output:
                 data_output.write(encrypted_json)
         if result_secret_key:
-            logger.debug("Writing output context to secret")
+            dai_logger.info("Writing output context to secret")
             if len(encrypted_json) >= size_of_1Mb:
-                logger.warning("Result size exceeds 1Mb and is too big to store in secret")
+                dai_logger.warning("Result size exceeds 1Mb and is too big to store in secret")
             else:
                 namespace, name, key = k8s.split_secret_resource_data(result_secret_key)
                 secret = k8s.get_client().read_namespaced_secret(name, namespace)
                 secret.data[key] = encrypted_json
                 k8s.get_client().replace_namespaced_secret(name, namespace, secret)
         if callback_url:
-            logger.debug("Pushing result using HTTP")
+            dai_logger.info("Pushing result using HTTP")
             url = base64.b64decode(callback_url).decode("UTF-8")
             try:
                 urllib3.PoolManager().request("POST", url, headers={'Content-Type': 'application/json'},
                                               body=encrypted_json)
             except Exception:
                 if should_retry_callback_request(encrypted_json):
-                    logger.error("Cannot finish Callback request.", exc_info=True)
-                    logger.info("Retry flag was set on Callback request, retrying until successful...")
+                    dai_logger.error("Cannot finish Callback request.", exc_info=True)
+                    dai_logger.info("Retry flag was set on Callback request, retrying until successful...")
                     retry_push_result_infinitely(encrypted_json)
                 else:
                     raise
 
     except Exception:
-        logger.error("Unexpected error occurred.", exc_info=True)
+        dai_logger.error("Unexpected error occurred.", exc_info=True)
 
 
 def retry_push_result_infinitely(encrypted_json):
@@ -197,7 +192,7 @@ def retry_push_result_infinitely(encrypted_json):
             response = urllib3.PoolManager().request("POST", url, headers={'Content-Type': 'application/json'}, body=encrypted_json)
             return response
         except Exception as e:
-            logger.warning(f"Cannot finish retried Callback request: {e}. Retrying in {retry_delay} seconds...")
+            dai_logger.warning(f"Cannot finish retried Callback request: {e}. Retrying in {retry_delay} seconds...")
             time.sleep(retry_delay)
             retry_delay = min(retry_delay * backoff_factor, max_backoff)
 
@@ -216,13 +211,13 @@ def execute_task(task_object: BaseTask):
     If an exception is raised during execution, log the error. Finally, update the output context file
     using the output context of the task object.
     """
+    global dai_task_object
     try:
-        global dai_task_object
         dai_task_object = task_object
-        logger.debug("Starting task execution")
+        dai_logger.info("Starting task execution")
         dai_task_object.execute_task()
     except Exception:
-        logger.error("Unexpected error occurred.", exc_info=True)
+        dai_logger.error("Unexpected error occurred.", exc_info=True)
     finally:
         update_output_context(dai_task_object.get_output_context())
 
@@ -261,7 +256,7 @@ def run():
         execute_task(task_obj)
     except Exception as e:
         # Log the error and update the output context file with exit code 1 if an exception is raised
-        logger.error("Unexpected error occurred.", exc_info=True)
+        dai_logger.error("Unexpected error occurred.", exc_info=True)
         update_output_context(OutputContext(1, str(e), {}, []))
     finally:
         if execution_mode == "daemon":
