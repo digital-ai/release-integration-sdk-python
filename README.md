@@ -44,6 +44,15 @@ class Hello(BaseTask):
 ```
 
 ## Changelog
+
+### Version 25.1.1
+
+#### ✨ New Features
+- **Introduced** a ready-to-use `dai_logger` object to simplify logging across all tasks
+
+#### 🔧 Changes & Improvements
+- **Refactored** the client creation process for the cluster
+
 ### Version 25.1.0
 
 #### 🚨 Breaking Changes
@@ -126,4 +135,5 @@ This pattern should be used for all API clients, such as `TemplateApi`, `TaskApi
 
 - 📦 **Digital.ai Release Python SDK**: [digitalai-release-sdk on PyPI](https://pypi.org/project/digitalai-release-sdk/)  
   The official SDK package for integrating with Digital.ai Release.
+
 
