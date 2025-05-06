@@ -1,23 +1,20 @@
-import logging
 import os
 import threading
 
 from kubernetes import watch
-
+from .logger import dai_logger
 from digitalai.release.integration import k8s
-
-logger = logging.getLogger("Digitalai")
 
 
 def start_input_context_watcher(on_input_context_update_func):
-    logger.debug("Input context watcher started")
+    dai_logger.info("Input context watcher started")
 
     stop = threading.Event()
 
     try:
         start_input_secret_watcher(on_input_context_update_func, stop)
     except Exception:
-        logger.error("Unexpected error occurred.", exc_info=True)
+        dai_logger.error("Unexpected error occurred.", exc_info=True)
         return
 
     # Wait until the watcher is stopped
@@ -25,7 +22,7 @@ def start_input_context_watcher(on_input_context_update_func):
 
 
 def start_input_secret_watcher(on_input_context_update_func, stop):
-    logger.debug("Input secret watcher started")
+    dai_logger.info("Input secret watcher started")
 
     kubernetes_client = k8s.get_client()
     field_selector = "metadata.name=" + os.getenv("INPUT_CONTEXT_SECRET")
@@ -39,7 +36,7 @@ def start_input_secret_watcher(on_input_context_update_func, stop):
 
         # Checking if 'session-key' field has changed
         if old_session_key and old_session_key != new_session_key:
-            logger.info("Detected input context value change")
+            dai_logger.info("Detected input context value change")
             on_input_context_update_func()
 
         # Set old session-key value
