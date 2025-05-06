@@ -84,12 +84,12 @@ def get_task_details():
         dai_logger.info("Reading input context from file")
         with open(input_context_file) as data_input:
             input_content = data_input.read()
-        dai_logger.info("Successfully loaded input context from file")
+        #dai_logger.info("Successfully loaded input context from file")
     else:
         k8s_client = k8s.get_client()
         dai_logger.info("Reading input context from secret")
         secret =k8s_client.read_namespaced_secret(input_context_secret, runner_namespace)
-        dai_logger.info("Successfully loaded input context from secret")
+        #dai_logger.info("Successfully loaded input context from secret")
         global base64_session_key, callback_url
         base64_session_key = base64.b64decode(secret.data["session-key"])
         callback_url = base64.b64decode(secret.data["url"])
@@ -117,7 +117,7 @@ def get_task_details():
             input_content = base64.b64decode(input_content)
 
     decrypted_json = get_encryptor().decrypt(input_content)
-    dai_logger.info("Successfully decrypted input context")
+    #dai_logger.info("Successfully decrypted input context")
     global input_context
     input_context = InputContext.from_dict(json.loads(decrypted_json))
 
