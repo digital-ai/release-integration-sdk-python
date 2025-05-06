@@ -12,7 +12,7 @@ packages = ["digitalai"]
 
 [project]
 name = "digitalai_release_sdk"
-version = "25.1.0"
+version = "25.1.1"
 authors = [
   { name="Digital.ai", email="pypi-devops@digital.ai" },
 ]
@@ -20,11 +20,11 @@ description = "Digital.ai Release SDK"
 readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
-    'dataclasses-json==0.6.7',
-    'pycryptodomex==3.21.0',
-    'python-dateutil==2.9.0',
-    'requests==2.32.3',
-    'kubernetes==32.0.1'
+    'dataclasses-json>=0.6.7',
+    'pycryptodomex>=3.21.0',
+    'python-dateutil>=2.9.0',
+    'requests>=2.32.3',
+    'kubernetes>=32.0.1'
 ]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
