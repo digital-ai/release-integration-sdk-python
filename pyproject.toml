@@ -12,7 +12,7 @@ packages = ["digitalai"]
 
 [project]
 name = "digitalai_release_sdk"
-version = "25.1.0"
+version = "25.1.1"
 authors = [
   { name="Digital.ai", email="pypi-devops@digital.ai" },
 ]

@@ -44,6 +44,15 @@ class Hello(BaseTask):
 ```
 
 ## Changelog
+
+### Version 25.1.1
+
+#### ✨ New Features
+- **Introduced** a ready-to-use `dai_logger` object to simplify logging across all tasks
+
+#### 🔧 Changes & Improvements
+- **Refactored** the client creation process for the cluster
+
 ### Version 25.1.0
 
 #### 🚨 Breaking Changes
