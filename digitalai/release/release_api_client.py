@@ -63,6 +63,23 @@ class ReleaseAPIClient:
 
         return response
 
+    def request_json(self, method, endpoint, params=None, json=None, data=None, **kwargs):
+        """
+        Sends an HTTP request, raises on HTTP errors, and returns the parsed JSON.
+
+        :param method: HTTP method (GET, POST, etc.)
+        :param endpoint: API endpoint (relative path)
+        :param params: Query parameters
+        :param json: JSON body
+        :param data: Raw body
+        :param kwargs: Additional request options
+        :return: The response JSON as a Python object
+        :raises: HTTPError if the response status is 4xx/5xx
+        """
+        resp = self._request(method, endpoint, params=params, json=json, data=data, **kwargs)
+        resp.raise_for_status()
+        return resp.json()
+
     def get(self, endpoint, params=None, **kwargs):
         """Sends a GET request to the specified endpoint."""
         return self._request("GET", endpoint, params=params, **kwargs)
