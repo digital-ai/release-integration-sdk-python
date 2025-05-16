@@ -1,58 +1,74 @@
-Module release_api
-==================
+# `ReleaseApi.find_releases_by_title`
 
-Classes
--------
+Retrieves a list of releases whose title matches the specified query.
 
-`ReleaseApi(client: digitalai.release.release_api_client.ReleaseAPIClient)`
-:   
+---
 
-    ### Methods
+## Method Signature
 
-    `find_releases_by_title(self, release_title: str) ‑> List[Dict[str, Any]]`
-    :   Finds releases by title.
-        
-        Args:
-            release_title (str): The title of the release to search for.
-        
-        Returns:
-            List[Dict[str, Any]]: A list of releases matching the title. Each release is represented as a dict containing release details.
-        
-        Example:
-            >>> api = ReleaseApi(client)
-            >>> api.find_releases_by_title("Find me")
-            [
-                {
-                    "id": "Applications/Release162151faba694d03aa3065665cf26f21",
-                    "type": "xlrelease.Release",
-                    "createdBy": "admin",
-                    "createdAt": "2025-04-28T07:00:34.387+0000",
-                    "lastModifiedBy": "admin",
-                    "lastModifiedAt": "2025-04-28T07:00:34.387+0000",
-                    "scmTraceabilityDataId": "0",
-                    "title": "Find me",
-                    "flagStatus": "OK",
-                    "overdueNotified": False,
-                    "maxConcurrentReleases": 100,
-                    "releaseTriggers": [],
-                    "teams": [],
-                    "memberViewers": [],
-                    "roleViewers": [],
-                    "attachments": [],
-                    "phases": [],
-                    "realFlagStatus": "OK",
-                    "status": "PLANNED",
-                    "kind": "RELEASE",
-                    "tags": [],
-                    "categories": [],
-                    "variables": [],
-                    "calendarPublished": False,
-                    "tutorial": False,
-                    "abortOnFailure": False,
-                    "archiveRelease": True,
-                    "allowPasswordsInAllFields": False,
-                    "disableNotifications": False,
-                    "allowConcurrentReleasesFromTrigger": True,
-                    "createdFromTrigger": False,
-                }
-            ]
+```python
+def find_releases_by_title(self, release_title: str) -> List[Dict[str, Any]]:
+```
+
+## Parameters
+
+| Parameter       | Type  | Description                                   |
+| --------------- | ----- | --------------------------------------------- |
+| `release_title` | `str` | The exact title of the release to search for. |
+
+## Returns
+
+A list of release objects matching the given title. Each release is represented as a JSON-like dictionary containing its details.
+
+**Return Type:** `List[Dict[str, Any]]`
+
+## Example Usage
+
+### Input
+
+```python
+release_title = "Find me"
+```
+
+### Output
+
+```json
+[
+  {
+    "id": "Applications/Release162151faba694d03aa3065665cf26f21",
+    "type": "xlrelease.Release",
+    "createdBy": "admin",
+    "createdAt": "2025-04-28T07:00:34.387+0000",
+    "lastModifiedBy": "admin",
+    "lastModifiedAt": "2025-04-28T07:00:34.387+0000",
+    "scmTraceabilityDataId": "0",
+    "title": "Find me",
+    "flagStatus": "OK",
+    "overdueNotified": false,
+    "maxConcurrentReleases": 100,
+    "releaseTriggers": [],
+    "teams": [],
+    "memberViewers": [],
+    "roleViewers": [],
+    "attachments": [],
+    "phases": [],
+    "realFlagStatus": "OK",
+    "status": "PLANNED",
+    "kind": "RELEASE",
+    "tags": [],
+    "categories": [],
+    "variables": [],
+    "calendarPublished": false,
+    "tutorial": false,
+    "abortOnFailure": false,
+    "archiveRelease": true,
+    "allowPasswordsInAllFields": false,
+    "disableNotifications": false,
+    "allowConcurrentReleasesFromTrigger": true,
+    "createdFromTrigger": false
+  }
+]
+```
+
+---
+
