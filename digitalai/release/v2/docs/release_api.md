@@ -1,21 +1,23 @@
-from typing import Any, Dict, List
-from digitalai.release.release_api_client import ReleaseAPIClient
+Module release_api
+==================
 
-class ReleaseApi:
+Classes
+-------
 
-    def __init__(self, client: ReleaseAPIClient) -> None:
-        self.client: ReleaseAPIClient = client
+`ReleaseApi(client: digitalai.release.release_api_client.ReleaseAPIClient)`
+:   
 
-    def find_releases_by_title(self, release_title: str) -> List[Dict[str, Any]]:
-        """
-        Finds releases by title.
+    ### Methods
 
+    `find_releases_by_title(self, release_title: str) ‑> List[Dict[str, Any]]`
+    :   Finds releases by title.
+        
         Args:
             release_title (str): The title of the release to search for.
-
+        
         Returns:
             List[Dict[str, Any]]: A list of releases matching the title. Each release is represented as a dict containing release details.
-
+        
         Example:
             >>> api = ReleaseApi(client)
             >>> api.find_releases_by_title("Find me")
@@ -54,12 +56,3 @@ class ReleaseApi:
                     "createdFromTrigger": False,
                 }
             ]
-        """
-        params = {"releaseTitle": release_title}
-        return self.client.request_json(
-            method="GET",
-            endpoint="/api/v1/releases/byTitle",
-            params=params
-        )
-
-
