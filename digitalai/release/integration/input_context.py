@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, List, Dict, Optional
 from dataclasses_json import dataclass_json, LetterCase
 
@@ -64,7 +64,7 @@ class CiDefinition:
     """
     id: str
     type: str
-    properties: List[PropertyDefinition]
+    properties: List[PropertyDefinition] = field(default_factory=list)
 
 
 @dataclass_json
