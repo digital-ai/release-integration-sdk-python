@@ -145,9 +145,7 @@ class ReleaseContext:
         an automated task as a specific user.
     """
     id: Optional[str] = None
-    automated_task_as_user: Optional[AutomatedTaskAsUserContext] = field(
-        default_factory=AutomatedTaskAsUserContext
-    )
+    automated_task_as_user: Optional[AutomatedTaskAsUserContext] = field(default_factory=AutomatedTaskAsUserContext)
 
 
 @dataclass_json()
