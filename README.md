@@ -45,6 +45,11 @@ class Hello(BaseTask):
 
 ## Changelog
 
+### Version 25.1.2
+
+#### 🛠️ Enhancements
+- **Added support** for the `lookup` functionality in task fields, allowing dynamic population of field values based on runtime data or external sources.
+
 ### Version 25.1.1
 
 #### ✨ New Features
