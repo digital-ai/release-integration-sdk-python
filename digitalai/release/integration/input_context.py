@@ -62,8 +62,8 @@ class CiDefinition:
     - type (str): Type of the CI.
     - properties (List[PropertyDefinition]): List of properties for the CI.
     """
-    id: str
-    type: str
+    id: Optional[str] = None
+    type: Optional[str] = None
     properties: List[PropertyDefinition]  = field(default_factory=list)
 
 
@@ -129,8 +129,8 @@ class AutomatedTaskAsUserContext:
     - username (str): The username to run the task as.
     - password (str): The password for the user.
     """
-    username: Optional[str]
-    password: Optional[str]
+    username: Optional[str] = None
+    password: Optional[str] = None
 
 
 @dataclass_json(letter_case=LetterCase.CAMEL)
@@ -144,8 +144,8 @@ class ReleaseContext:
     - automated_task_as_user (AutomatedTaskAsUserContext): Context for running
         an automated task as a specific user.
     """
-    id: str
-    automated_task_as_user: AutomatedTaskAsUserContext
+    id: Optional[str] = None
+    automated_task_as_user: Optional[AutomatedTaskAsUserContext] = field(default_factory=AutomatedTaskAsUserContext)
 
 
 @dataclass_json()
@@ -158,6 +158,7 @@ class InputContext:
     - release (ReleaseContext): Context of the release.
     - task (TaskContext): Context of the task.
     """
-    release: ReleaseContext
-    task: TaskContext
+    release: Optional[ReleaseContext] = None
+    task: Optional[TaskContext] = None
+
 
