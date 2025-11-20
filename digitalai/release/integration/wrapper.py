@@ -127,7 +127,8 @@ def get_task_details():
     masked_std_out.secrets = secrets
     masked_std_err.secrets = secrets
     task_properties = input_context.task.build_locals()
-    return task_properties, input_context.task.type
+    script_path = input_context.task.script_location()
+    return task_properties, input_context.task.type, script_path
 
 
 def update_output_context(output_context: OutputContext):
@@ -239,13 +240,10 @@ def run():
     try:
         # Get task details, parse the script file to get the task class, import the module,
         # create an instance of the task class, and execute the task
-        task_props, task_type = get_task_details()
+        task_props, task_type, script_path = get_task_details()
         task_class_name = task_type.split(".")[1]
-        print("task_props:", task_props)
-        # --- NEW LOGIC: Check if scriptLocation is provided ---
-        if "scriptLocation" in task_props and task_props["scriptLocation"]:
-            script_path = task_props["scriptLocation"]
 
+        if script_path:
             script_path = script_path.lstrip("/\\")
             script_path = script_path.replace("/", os.sep).replace("\\", os.sep)
 
