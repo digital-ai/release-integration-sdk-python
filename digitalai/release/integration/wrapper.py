@@ -120,9 +120,6 @@ def get_task_details():
     #dai_logger.info("Successfully decrypted input context")
     global input_context
     input_context = InputContext.from_dict(json.loads(decrypted_json))
-    print("decrypted_json:", json.loads(decrypted_json))
-    print("input_context:", input_context)
-
     secrets = input_context.task.secrets()
     if input_context.release and input_context.release.automated_task_as_user and input_context.release.automated_task_as_user.password:
         secrets.append(input_context.release.automated_task_as_user.password)
@@ -259,7 +256,6 @@ def run():
             module_name = module_name.replace(".py", "").replace(os.sep, ".")
             module = importlib.import_module(module_name)
 
-            # Ensure the class exists inside the module
             if not hasattr(module, task_class_name):
                 raise ValueError(
                     f"Class '{task_class_name}' not found in script file: {relative_path}"
