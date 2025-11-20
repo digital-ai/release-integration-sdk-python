@@ -241,12 +241,37 @@ def run():
         # create an instance of the task class, and execute the task
         task_props, task_type = get_task_details()
         task_class_name = task_type.split(".")[1]
-        class_file_path = find_class_file(os.getcwd(), task_class_name)
-        if not class_file_path:
-            raise ValueError(f"Could not find the {task_class_name} class")
-        module_name = class_file_path.replace(os.getcwd() + os.sep, '')
-        module_name = module_name.replace(".py", "").replace(os.sep, ".")
-        module = importlib.import_module(module_name)
+        # --- NEW LOGIC: Check if scriptLocation is provided ---
+        if "scriptLocation" in task_props and task_props["scriptLocation"]:
+            script_path = task_props["scriptLocation"]
+
+            script_path = script_path.lstrip("/\\")
+            script_path = script_path.replace("/", os.sep).replace("\\", os.sep)
+
+            full_path = os.path.join(os.getcwd(), "src", script_path)
+            relative_path = os.path.join("src", script_path)
+
+            if not os.path.isfile(full_path):
+                raise ValueError(f"Script file not found at: {relative_path}")
+
+            module_name = full_path.replace(os.getcwd() + os.sep, "")
+            module_name = module_name.replace(".py", "").replace(os.sep, ".")
+            module = importlib.import_module(module_name)
+
+            # Ensure the class exists inside the module
+            if not hasattr(module, task_class_name):
+                raise ValueError(
+                    f"Class '{task_class_name}' not found in script file: {relative_path}"
+                )
+
+        else:
+            class_file_path = find_class_file(os.getcwd(), task_class_name)
+            if not class_file_path:
+                raise ValueError(f"Could not find the '{task_class_name}' class")
+            module_name = class_file_path.replace(os.getcwd() + os.sep, "")
+            module_name = module_name.replace(".py", "").replace(os.sep, ".")
+            module = importlib.import_module(module_name)
+
         task_class = getattr(module, task_class_name)
         task_obj = task_class()
         task_obj.input_properties = task_props
