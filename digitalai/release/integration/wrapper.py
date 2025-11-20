@@ -120,6 +120,7 @@ def get_task_details():
     #dai_logger.info("Successfully decrypted input context")
     global input_context
     input_context = InputContext.from_dict(json.loads(decrypted_json))
+    print("decrypted_json:", json.loads(decrypted_json))
     print("input_context:", input_context)
 
     secrets = input_context.task.secrets()
