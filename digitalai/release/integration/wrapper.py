@@ -241,6 +241,7 @@ def run():
         # create an instance of the task class, and execute the task
         task_props, task_type = get_task_details()
         task_class_name = task_type.split(".")[1]
+        print("task_props:", task_props)
         # --- NEW LOGIC: Check if scriptLocation is provided ---
         if "scriptLocation" in task_props and task_props["scriptLocation"]:
             script_path = task_props["scriptLocation"]

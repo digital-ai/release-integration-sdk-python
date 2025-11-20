@@ -32,15 +32,7 @@
 				"kind": "STRING",
 				"category": "output",
 				"password": false
-			},
-            {
-                "name": "scriptLocation",
-                "value": "hello.py",
-                "kind": "STRING",
-                "category": "input",
-                "password": false
-
-            }
+			}
 		]
 	}
 }
