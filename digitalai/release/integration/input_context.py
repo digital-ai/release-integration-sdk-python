@@ -116,7 +116,7 @@ class TaskContext(CiDefinition):
         Returns:
         - str: The value of the 'scriptLocation' property.
         """
-        return next(p.value for p in self.properties if p.name == 'scriptLocation')
+        return next((p.value for p in self.properties if p.name == 'scriptLocation'), '')
 
 
 @dataclass_json

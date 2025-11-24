@@ -120,14 +120,14 @@ def get_task_details():
     #dai_logger.info("Successfully decrypted input context")
     global input_context
     input_context = InputContext.from_dict(json.loads(decrypted_json))
-
     secrets = input_context.task.secrets()
     if input_context.release and input_context.release.automated_task_as_user and input_context.release.automated_task_as_user.password:
         secrets.append(input_context.release.automated_task_as_user.password)
     masked_std_out.secrets = secrets
     masked_std_err.secrets = secrets
     task_properties = input_context.task.build_locals()
-    return task_properties, input_context.task.type
+    script_path = input_context.task.script_location()
+    return task_properties, input_context.task.type, script_path
 
 
 def update_output_context(output_context: OutputContext):
@@ -239,14 +239,36 @@ def run():
     try:
         # Get task details, parse the script file to get the task class, import the module,
         # create an instance of the task class, and execute the task
-        task_props, task_type = get_task_details()
+        task_props, task_type, script_path = get_task_details()
         task_class_name = task_type.split(".")[1]
-        class_file_path = find_class_file(os.getcwd(), task_class_name)
-        if not class_file_path:
-            raise ValueError(f"Could not find the {task_class_name} class")
-        module_name = class_file_path.replace(os.getcwd() + os.sep, '')
-        module_name = module_name.replace(".py", "").replace(os.sep, ".")
-        module = importlib.import_module(module_name)
+
+        if script_path:
+            script_path = script_path.lstrip("/\\")
+            script_path = script_path.replace("/", os.sep).replace("\\", os.sep)
+
+            full_path = os.path.join(os.getcwd(), "src", script_path)
+            relative_path = os.path.join("src", script_path)
+
+            if not os.path.isfile(full_path):
+                raise ValueError(f"Script file not found at: {relative_path}")
+
+            module_name = full_path.replace(os.getcwd() + os.sep, "")
+            module_name = module_name.replace(".py", "").replace(os.sep, ".")
+            module = importlib.import_module(module_name)
+
+            if not hasattr(module, task_class_name):
+                raise ValueError(
+                    f"Class '{task_class_name}' not found in script file: {relative_path}"
+                )
+
+        else:
+            class_file_path = find_class_file(os.getcwd(), task_class_name)
+            if not class_file_path:
+                raise ValueError(f"Could not find the '{task_class_name}' class")
+            module_name = class_file_path.replace(os.getcwd() + os.sep, "")
+            module_name = module_name.replace(".py", "").replace(os.sep, ".")
+            module = importlib.import_module(module_name)
+
         task_class = getattr(module, task_class_name)
         task_obj = task_class()
         task_obj.input_properties = task_props
