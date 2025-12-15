@@ -34,9 +34,10 @@ def get_client():
                     configuration = client.Configuration.get_default_copy()
                     configuration.verify_ssl = False
                     kubernetes_client = client.CoreV1Api(client.ApiClient(configuration))
-                    dai_logger.warning("Kubernetes TLS certificate verification disabled")
+                    dai_logger.info("Kubernetes TLS certificate verification disabled")
                 else:
                     kubernetes_client = client.CoreV1Api()
+                    dai_logger.info("Kubernetes TLS certificate verification enabled")
                 #dai_logger.info("Kubernetes client created successfully")
 
     return kubernetes_client
