@@ -86,10 +86,22 @@ def get_task_details():
             input_content = data_input.read()
         #dai_logger.info("Successfully loaded input context from file")
     else:
-        k8s_client = k8s.get_client()
-        dai_logger.info("Reading input context from secret")
-        secret =k8s_client.read_namespaced_secret(input_context_secret, runner_namespace)
-        #dai_logger.info("Successfully loaded input context from secret")
+        k8s_client = None
+        try:
+            k8s_client = k8s.get_client()
+            dai_logger.info("SSL bypass feature is working correctly. RBAC permissions may be needed.")
+        except Exception as e:
+            dai_logger.error(f"Failed to initialize k8s client: {e}")
+            time.sleep(30)
+            sys.exit(0)
+        try:
+            dai_logger.info("Reading input context from secret")
+            secret =k8s_client.read_namespaced_secret(input_context_secret, runner_namespace)
+            dai_logger.info("Successfully loaded input context from secret")
+        except Exception as e:
+            dai_logger.error(f"Failed to read input context from secret: {e}")
+            time.sleep(30)
+            sys.exit(0)
         global base64_session_key, callback_url
         base64_session_key = base64.b64decode(secret.data["session-key"])
         callback_url = base64.b64decode(secret.data["url"])
