@@ -29,7 +29,7 @@ def get_client():
                         dai_logger.exception("Failed to load any Kubernetes config")
                         raise RuntimeError("Could not configure Kubernetes client")
                 # Check if SSL verification should be disabled (for legacy clusters)
-                if os.getenv('K8S_SKIP_TLS_VERIFY', 'false').lower() == 'true':
+                if os.getenv('SKIP_TLS_LEGACY_K8S', 'false').lower() == 'true':
                     configuration = client.Configuration.get_default_copy()
                     configuration.verify_ssl = False
                     kubernetes_client = client.CoreV1Api(client.ApiClient(configuration))
