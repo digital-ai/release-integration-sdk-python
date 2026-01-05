@@ -45,7 +45,7 @@ class Hello(BaseTask):
 
 ## Changelog
 
-### Version 25.6.0
+### Version 26.1.0
 
 #### 🛠️ Enhancements
 
