@@ -1,3 +1,4 @@
+import os
 import threading
 
 from kubernetes import client, config
@@ -27,7 +28,15 @@ def get_client():
                     except Exception:
                         dai_logger.exception("Failed to load any Kubernetes config")
                         raise RuntimeError("Could not configure Kubernetes client")
-                kubernetes_client = client.CoreV1Api()
+
+                # Check if SSL verification should be disabled (for legacy clusters)
+                if os.getenv('SKIP_TLS_LEGACY_K8S', 'false').lower() == 'true':
+                    configuration = client.Configuration.get_default_copy()
+                    configuration.verify_ssl = False
+                    kubernetes_client = client.CoreV1Api(client.ApiClient(configuration))
+                    dai_logger.info("Kubernetes TLS certificate verification disabled")
+                else:
+                    kubernetes_client = client.CoreV1Api()
                 #dai_logger.info("Kubernetes client created successfully")
 
     return kubernetes_client
