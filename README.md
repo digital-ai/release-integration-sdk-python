@@ -45,6 +45,12 @@ class Hello(BaseTask):
 
 ## Changelog
 
+### Version 25.3.1
+
+#### 🛠️ Enhancements
+
+- **Added support** for skipping SSL verification in legacy clusters.
+
 ### Version 25.3.0
 
 #### 🛠️ Enhancements
