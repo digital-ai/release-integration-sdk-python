@@ -49,7 +49,9 @@ class Hello(BaseTask):
 
 #### 🛠️ Enhancements
 
-- **Added support** for skipping SSL verification in legacy clusters.
+- Updated minimum Python version requirement to **3.10**.
+- Updated dependency versions to enhance compatibility and security.
+- Added support for the **scriptLocation** hidden property to explicitly define the task script path, improving performance and file organization.
 
 ---
 
