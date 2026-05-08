@@ -6,6 +6,6 @@ class ReleaseApi:
     def __init__(self, release_api_client: ReleaseAPIClient) -> None:
         self.api = release_api_client
 
-    def get_release(self, release_id: str) -> List[Dict[str, Any]]:
-        response = self.api.get(f"/api/v1/releases/{release_id}")
+    def getRelease(self, releaseId: str) -> List[Dict[str, Any]]:
+        response = self.api.get(f"/api/v1/releases/{releaseId}")
         return response.json()

@@ -5,4 +5,4 @@ client = ReleaseAPIClient("http://localhost:5516", "admin", "admin")
 
 api = ReleaseApi(client)
 
-print(api.get_release("Releaseed825e506e944b16b050bf4af5f9402a"))
+print(api.getRelease("Releaseed825e506e944b16b050bf4af5f9402a"))
