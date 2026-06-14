@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build]
 exclude = [
-  ".gitignore", "tests/*", ".github/*"
+  ".gitignore", "tests/*", ".github/*", "DEVELOPMENT.md"
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -42,3 +42,8 @@ classifiers = [
 [project.urls]
 Homepage = "https://digital.ai/"
 Documentation = "https://docs.digital.ai/release/docs/category/python-sdk"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
