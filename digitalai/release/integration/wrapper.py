@@ -11,7 +11,6 @@ import time
 from typing import Any, Dict, Optional, Tuple
 
 import requests
-import urllib3
 
 from digitalai.release.integration import k8s, watcher
 from .base_task import BaseTask
@@ -46,10 +45,10 @@ size_of_1Mb = 1024 * 1024
 HTTP_CONNECT_TIMEOUT = float(os.getenv('HTTP_CONNECT_TIMEOUT', '10'))
 HTTP_READ_TIMEOUT = float(os.getenv('HTTP_READ_TIMEOUT', '60'))
 
-# A single connection pool reused across all callback requests (instead of a fresh
-# PoolManager per call, which defeats connection pooling).
-_http_pool: urllib3.PoolManager = urllib3.PoolManager()
-_urllib3_timeout = urllib3.Timeout(connect=HTTP_CONNECT_TIMEOUT, read=HTTP_READ_TIMEOUT)
+# A single Session reused across all callback requests so the underlying urllib3
+# connection pool is shared (instead of opening a fresh connection per call).
+_http_session: requests.Session = requests.Session()
+_HTTP_TIMEOUT = (HTTP_CONNECT_TIMEOUT, HTTP_READ_TIMEOUT)
 
 
 # Create the encryptor
@@ -84,22 +83,20 @@ def abort_handler(signum, frame):
 signal.signal(signal.SIGTERM, abort_handler)
 
 
-def _post_callback(url: str, encrypted_json) -> urllib3.HTTPResponse:
+def _post_callback(url: str, encrypted_json) -> requests.Response:
     """
-    POST the encrypted result to the callback URL using the shared connection pool.
+    POST the encrypted result to the callback URL using the shared Session.
 
     Raises an exception on transport errors *and* on HTTP error status codes
     (>= 400), so that the caller's retry logic is triggered in both cases.
     """
-    response = _http_pool.request(
-        "POST",
+    response = _http_session.post(
         url,
         headers={'Content-Type': 'application/json'},
-        body=encrypted_json,
-        timeout=_urllib3_timeout,
+        data=encrypted_json,
+        timeout=_HTTP_TIMEOUT,
     )
-    if response.status >= 400:
-        raise RuntimeError(f"Callback request failed with HTTP status {response.status}")
+    response.raise_for_status()
     return response
 
 
@@ -132,7 +129,7 @@ def get_task_details() -> Tuple[Dict[str, Any], str, str]:
             fetch_url_bytes = base64.b64decode(fetch_url_base64)
             fetch_url = base64.b64decode(fetch_url_bytes).decode("UTF-8")
             try:
-                response = requests.get(fetch_url, timeout=(HTTP_CONNECT_TIMEOUT, HTTP_READ_TIMEOUT))
+                response = _http_session.get(fetch_url, timeout=_HTTP_TIMEOUT)
                 response.raise_for_status()
             except requests.exceptions.RequestException as e:
                 dai_logger.error("Failed to fetch data.", exc_info=True)

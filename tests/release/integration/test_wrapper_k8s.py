@@ -140,7 +140,7 @@ class TestGetTaskDetailsFromSecret(_WrapperK8sTestBase):
         fake_response.status_code = 200
         fake_response.raise_for_status = mock.Mock()
 
-        with mock.patch.object(wrapper.requests, "get", return_value=fake_response) as fake_get:
+        with mock.patch.object(wrapper._http_session, "get", return_value=fake_response) as fake_get:
             task_properties, task_type, _ = wrapper.get_task_details()
 
         fake_get.assert_called_once()
