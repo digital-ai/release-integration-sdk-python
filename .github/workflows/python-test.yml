@@ -3,6 +3,7 @@ name: Python Test
 on:
   push:
     branches:
+      - main
       - master
       - release/*
   pull_request:
@@ -22,6 +23,4 @@ jobs:
     - name: Install dependencies
       run: uv sync --frozen
     - name: Run tests
-      run: |
-        cd tests/release/integration
-        uv run --project ${{ github.workspace }} python -m unittest test_wrapper.py
+      run: uv run --project ${{ github.workspace }} python -m pytest tests/release/integration -v
