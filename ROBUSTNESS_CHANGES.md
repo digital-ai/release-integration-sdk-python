@@ -86,11 +86,30 @@ Expected output context: `{"exitCode": 0, "jobErrorMessage": "", "outputProperti
 - **Asserts the subprocess exit code** and that `output.json` was produced (the old test ignored the return code, so a crashing wrapper could pass), then compares against the expected output context.
 
 ### `tests/release/integration/input.json`
-- Updated to the sample `containerExamples.Hello` input context.
+- Updated to the sample `containerExamples.Hello` input context (with `automatedTaskAsUser` set to `admin`/`admin`).
+
+### `tests/release/integration/test_wrapper_k8s.py` — new
+End-to-end coverage of the **Kubernetes execution path** (input read from a
+Secret, result written to a Secret and pushed to a callback URL) using a fully
+mocked Kubernetes client and callback transport — no cluster or network needed.
+A blank `session-key` selects the NoOp encryptor so the test stays independent of
+AES key material; helpers reproduce the real Secret base64 (and double-base64
+URL) encoding.
+
+Cases (11):
+- **Input from Secret:** decodes the input context, sets `callback_url`, and registers the "Run as user" password for masking.
+- **Fetch-URL fallback:** empty `input` triggers an HTTP fetch — and asserts a `timeout` is passed (regression guard for the robustness fix).
+- **Missing fetch URL → `ValueError`.**
+- **Secret read failure propagates** out of `get_task_details` (so `run()` reports failure).
+- **Result written to Secret + callback pushed** to the correctly decoded URL.
+- **Result > 1Mb** skips the Secret write but still pushes the callback.
+- **Secret write failure is swallowed and logged** (`update_output_context` never raises) and no callback is attempted.
+- **Callback retry:** first push fails → `retry_push_result_infinitely` re-reads the Secret and succeeds.
+- **`should_retry_callback_request` matrix:** size × output-file presence (3 cases).
 
 ## Verification
 
 ```
-$ python -m pytest tests/release/integration/test_base_task.py tests/release/integration/test_wrapper.py
-14 passed
+$ python -m pytest tests/release/integration/
+23 passed
 ```
