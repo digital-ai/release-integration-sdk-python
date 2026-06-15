@@ -24,6 +24,20 @@ SAMPLE_INPUT_CONTEXT = {
     },
 }
 
+# Same task, but with an explicit scriptLocation so the wrapper loads the class via
+# the `if script_path:` branch (importlib) instead of walking the tree. Points at the
+# src/sample/hello.py fixture, which defines the Hello1 class.
+SAMPLE_INPUT_CONTEXT_WITH_SCRIPT = {
+    "release": SAMPLE_INPUT_CONTEXT["release"],
+    "task": {
+        "id": SAMPLE_INPUT_CONTEXT["task"]["id"],
+        "type": "containerExamples.Hello1",
+        "properties": SAMPLE_INPUT_CONTEXT["task"]["properties"] + [
+            {"name": "scriptLocation", "value": "sample/hello.py", "kind": "STRING", "category": "input", "password": False},
+        ],
+    },
+}
+
 EXPECTED_OUTPUT = {
     "exitCode": 0,
     "jobErrorMessage": "",
@@ -38,18 +52,15 @@ class TestWrapper(unittest.TestCase):
     def setUp(self):
         self.input_path = os.path.join(THIS_DIR, "input.json")
         self.output_path = os.path.join(THIS_DIR, "output.json")
-        # Write the sample input context so the test is self-contained.
-        with open(self.input_path, "w") as f:
-            json.dump(SAMPLE_INPUT_CONTEXT, f)
         # Start from a clean slate so a stale file can never mask a failure.
         if os.path.exists(self.output_path):
             os.remove(self.output_path)
 
-    def test_wrapper(self):
-        """
-        Runs the wrapper as a subprocess with the sample input context and verifies
-        that it exits successfully and produces the expected output context.
-        """
+    def _run_wrapper(self, input_context):
+        """Write the given input context, run the wrapper as a subprocess, and return the parsed output."""
+        with open(self.input_path, "w") as f:
+            json.dump(input_context, f)
+
         env = dict(os.environ)
         env["INPUT_LOCATION"] = "input.json"
         env["OUTPUT_LOCATION"] = "output.json"
@@ -70,8 +81,22 @@ class TestWrapper(unittest.TestCase):
         self.assertTrue(os.path.exists(self.output_path), "wrapper did not produce output.json")
 
         with open(self.output_path, "r") as json_file:
-            actual_output = json.load(json_file)
+            return json.load(json_file)
 
+    def test_wrapper(self):
+        """
+        Runs the wrapper with a sample input context that has no scriptLocation, so the
+        task class is resolved via the find_class_file fallback (the `else` branch of run()).
+        """
+        actual_output = self._run_wrapper(SAMPLE_INPUT_CONTEXT)
+        self.assertEqual(EXPECTED_OUTPUT, actual_output)
+
+    def test_wrapper_with_script_location(self):
+        """
+        Runs the wrapper with a scriptLocation set, so the task class is loaded via
+        importlib (the `if script_path:` branch of run()).
+        """
+        actual_output = self._run_wrapper(SAMPLE_INPUT_CONTEXT_WITH_SCRIPT)
         self.assertEqual(EXPECTED_OUTPUT, actual_output)
 
 
