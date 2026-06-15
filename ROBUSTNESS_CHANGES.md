@@ -79,6 +79,7 @@ Expected output context: `{"exitCode": 0, "jobErrorMessage": "", "outputProperti
 - **Fixed a broken import.** The file imported `_find_folder_id` / `_phase_id_from` from `base_task`, which no longer exist (id parsing was refactored into `ids.Ids`). The module failed to even collect (`ImportError`).
 - Re-pointed id tests at the current `Ids` API and added coverage for `segment_name` / `parent_id` / `is_root`.
 - Added `TestBaseTaskOutput`: success/error exit codes, output-property validation, input-property guard, and the new `get_task_user()` / credential-validation behaviour.
+- Added `TestAutomatedTaskAsUser` for the **"Run as user" (`automatedTaskAsUser`) username/password**: `get_task_user()` returns the populated credentials; `get_release_api_client()` passes `(server_url, username, password)` to `ReleaseAPIClient` (mocked); and it raises `ValueError` for missing password, missing username, blank credentials, or missing server URL.
 
 ### `tests/release/integration/test_wrapper.py` — rewritten for robustness
 - Now **self-contained**: writes the sample input context itself and removes any stale `output.json` in `setUp`.
@@ -111,5 +112,5 @@ Cases (11):
 
 ```
 $ python -m pytest tests/release/integration/
-23 passed
+31 passed
 ```
