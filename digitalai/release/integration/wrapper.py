@@ -8,6 +8,7 @@ import os
 import signal
 import sys
 import time
+from typing import Any, Dict, Optional, Tuple
 
 import requests
 import urllib3
@@ -37,9 +38,19 @@ result_secret_key: str = os.getenv('RESULT_SECRET_NAME', '')
 runner_namespace: str = os.getenv('RUNNER_NAMESPACE', '')
 execution_mode: str = os.getenv('EXECUTOR_EXECUTION_MODE', '')
 
-input_context: InputContext = None
+input_context: Optional[InputContext] = None
 
 size_of_1Mb = 1024 * 1024
+
+# HTTP timeouts (seconds). A missing timeout lets a hung server stall the runner forever.
+HTTP_CONNECT_TIMEOUT = float(os.getenv('HTTP_CONNECT_TIMEOUT', '10'))
+HTTP_READ_TIMEOUT = float(os.getenv('HTTP_READ_TIMEOUT', '60'))
+
+# A single connection pool reused across all callback requests (instead of a fresh
+# PoolManager per call, which defeats connection pooling).
+_http_pool: urllib3.PoolManager = urllib3.PoolManager()
+_urllib3_timeout = urllib3.Timeout(connect=HTTP_CONNECT_TIMEOUT, read=HTTP_READ_TIMEOUT)
+
 
 # Create the encryptor
 def get_encryptor():
@@ -51,7 +62,7 @@ def get_encryptor():
 
 
 # Initialize the global task object
-dai_task_object: BaseTask = None
+dai_task_object: Optional[BaseTask] = None
 
 
 def abort_handler(signum, frame):
@@ -73,7 +84,26 @@ def abort_handler(signum, frame):
 signal.signal(signal.SIGTERM, abort_handler)
 
 
-def get_task_details():
+def _post_callback(url: str, encrypted_json) -> urllib3.HTTPResponse:
+    """
+    POST the encrypted result to the callback URL using the shared connection pool.
+
+    Raises an exception on transport errors *and* on HTTP error status codes
+    (>= 400), so that the caller's retry logic is triggered in both cases.
+    """
+    response = _http_pool.request(
+        "POST",
+        url,
+        headers={'Content-Type': 'application/json'},
+        body=encrypted_json,
+        timeout=_urllib3_timeout,
+    )
+    if response.status >= 400:
+        raise RuntimeError(f"Callback request failed with HTTP status {response.status}")
+    return response
+
+
+def get_task_details() -> Tuple[Dict[str, Any], str, str]:
     """
     Get the task details by reading the input context file or fetching from secret, decrypting the contents using the encryptor,
     and parsing the JSON data into an InputContext object. Then, set the secrets for the masked standard output
@@ -84,40 +114,35 @@ def get_task_details():
         dai_logger.info("Reading input context from file")
         with open(input_context_file) as data_input:
             input_content = data_input.read()
-        #dai_logger.info("Successfully loaded input context from file")
     else:
         k8s_client = k8s.get_client()
         dai_logger.info("Reading input context from secret")
-        secret =k8s_client.read_namespaced_secret(input_context_secret, runner_namespace)
-        #dai_logger.info("Successfully loaded input context from secret")
+        secret = k8s_client.read_namespaced_secret(input_context_secret, runner_namespace)
         global base64_session_key, callback_url
         base64_session_key = base64.b64decode(secret.data["session-key"])
         callback_url = base64.b64decode(secret.data["url"])
 
         input_content = secret.data["input"]
-        if not input_content or len(input_content) == 0:
+        if not input_content:
             fetch_url_base64 = secret.data["fetchUrl"]
-            if not fetch_url_base64 or len(fetch_url_base64) == 0:
+            if not fetch_url_base64:
                 raise ValueError("Cannot find fetch URL for task")
 
+            # The fetch URL is double base64 encoded in the secret.
             fetch_url_bytes = base64.b64decode(fetch_url_base64)
             fetch_url = base64.b64decode(fetch_url_bytes).decode("UTF-8")
             try:
-                response = requests.get(fetch_url)
+                response = requests.get(fetch_url, timeout=(HTTP_CONNECT_TIMEOUT, HTTP_READ_TIMEOUT))
                 response.raise_for_status()
             except requests.exceptions.RequestException as e:
                 dai_logger.error("Failed to fetch data.", exc_info=True)
                 raise e
-
-            if response.status_code != 200:
-                raise ValueError(f"Failed to fetch data, server returned status: {response.status_code}")
 
             input_content = response.content
         else:
             input_content = base64.b64decode(input_content)
 
     decrypted_json = get_encryptor().decrypt(input_content)
-    #dai_logger.info("Successfully decrypted input context")
     global input_context
     input_context = InputContext.from_dict(json.loads(decrypted_json))
     secrets = input_context.task.secrets()
@@ -156,8 +181,7 @@ def update_output_context(output_context: OutputContext):
             dai_logger.info("Pushing result using HTTP")
             url = base64.b64decode(callback_url).decode("UTF-8")
             try:
-                urllib3.PoolManager().request("POST", url, headers={'Content-Type': 'application/json'},
-                                              body=encrypted_json)
+                _post_callback(url, encrypted_json)
             except Exception:
                 if should_retry_callback_request(encrypted_json):
                     dai_logger.error("Cannot finish Callback request.", exc_info=True)
@@ -180,29 +204,25 @@ def retry_push_result_infinitely(encrypted_json):
     backoff_factor = 2.0
 
     while True:
-        try:
-            # If we can't read the secret, we should fail fast
-            secret = k8s.get_client().read_namespaced_secret(input_context_secret, runner_namespace)
-        except Exception:
-            raise
+        # If we can't read the secret we should fail fast (let the exception propagate).
+        secret = k8s.get_client().read_namespaced_secret(input_context_secret, runner_namespace)
 
         try:
-            callback_url = base64.b64decode(secret.data["url"])
-            url = base64.b64decode(callback_url).decode("UTF-8")
-            response = urllib3.PoolManager().request("POST", url, headers={'Content-Type': 'application/json'}, body=encrypted_json)
-            return response
+            current_callback_url = base64.b64decode(secret.data["url"])
+            url = base64.b64decode(current_callback_url).decode("UTF-8")
+            return _post_callback(url, encrypted_json)
         except Exception as e:
             dai_logger.warning(f"Cannot finish retried Callback request: {e}. Retrying in {retry_delay} seconds...")
             time.sleep(retry_delay)
             retry_delay = min(retry_delay * backoff_factor, max_backoff)
 
 
-def should_retry_callback_request(encrypted_data):
+def should_retry_callback_request(encrypted_data) -> bool:
     """
     Checks if callback request should be retried on failure.
     It should be retried when result is too big for Secret and Output File handler is not used.
     """
-    return len(encrypted_data) >= size_of_1Mb and len(input_context_file) == 0
+    return len(encrypted_data) >= size_of_1Mb and not input_context_file
 
 
 def execute_task(task_object: BaseTask):
@@ -219,7 +239,14 @@ def execute_task(task_object: BaseTask):
     except Exception:
         dai_logger.error("Unexpected error occurred.", exc_info=True)
     finally:
-        update_output_context(dai_task_object.get_output_context())
+        # Guard against a task object that was never constructed or that failed
+        # before producing an output context, so the finally block does not raise
+        # a second exception that masks the original one.
+        if dai_task_object is not None and dai_task_object.get_output_context() is not None:
+            update_output_context(dai_task_object.get_output_context())
+        else:
+            dai_logger.error("No output context available to report task result")
+            update_output_context(OutputContext(1, "Task produced no output context", {}, []))
 
 
 def find_class_file(root_dir, class_name):
@@ -227,11 +254,15 @@ def find_class_file(root_dir, class_name):
         for filename in files:
             if filename.endswith('.py'):
                 filepath = os.path.join(root, filename)
-                with open(filepath) as file:
-                    node = ast.parse(file.read())
-                    classes = [n.name for n in node.body if isinstance(n, ast.ClassDef)]
-                    if class_name in classes:
-                        return filepath
+                try:
+                    with open(filepath, encoding="utf-8") as file:
+                        node = ast.parse(file.read())
+                except (SyntaxError, UnicodeDecodeError, OSError):
+                    # Skip files that cannot be read or parsed instead of aborting the whole search.
+                    continue
+                classes = [n.name for n in node.body if isinstance(n, ast.ClassDef)]
+                if class_name in classes:
+                    return filepath
     return None
 
 
@@ -240,6 +271,8 @@ def run():
         # Get task details, parse the script file to get the task class, import the module,
         # create an instance of the task class, and execute the task
         task_props, task_type, script_path = get_task_details()
+        if "." not in task_type:
+            raise ValueError(f"Invalid task type '{task_type}', expected format '<prefix>.<ClassName>'")
         task_class_name = task_type.split(".")[1]
 
         if script_path:

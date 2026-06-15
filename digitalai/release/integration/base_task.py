@@ -1,11 +1,11 @@
-import logging
 import sys
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from .input_context import AutomatedTaskAsUserContext
 from .output_context import OutputContext
 from .exceptions import AbortException
+from .ids import Ids
 from .logger import dai_logger
 from digitalai.release.release_api_client import ReleaseAPIClient
 
@@ -128,10 +128,13 @@ class BaseTask(ABC):
         """
         return self.release_server_url
 
-    def get_task_user(self) -> AutomatedTaskAsUserContext:
+    def get_task_user(self) -> Optional[AutomatedTaskAsUserContext]:
         """
-        Returns the user details that are executing the task.
+        Returns the user details that are executing the task, or ``None`` when no
+        release context is available.
         """
+        if not self.release_context:
+            return None
         return self.release_context.automated_task_as_user
 
     def get_release_id(self) -> str:
@@ -146,6 +149,19 @@ class BaseTask(ABC):
         """
         return self.task_id
 
+    def get_phase_id(self) -> str:
+        """
+        Returns the Phase ID of the task, derived from the task id.
+        """
+        return Ids.phase_id_from(self.get_task_id())
+
+    def get_folder_id(self) -> str:
+        """
+        Returns the ID of the folder that contains the release, derived from the
+        release id.
+        """
+        return Ids.find_folder_id(self.get_release_id())
+
     def get_release_api_client(self) -> ReleaseAPIClient:
         """
         Returns a ReleaseAPIClient object with default configuration based on the task.
@@ -159,10 +175,11 @@ class BaseTask(ABC):
         """
         Validates that the necessary credentials are available for connecting to the Release API.
         """
+        task_user = self.get_task_user()
         if not all([
             self.get_release_server_url(),
-            self.get_task_user().username,
-            self.get_task_user().password
+            task_user and task_user.username,
+            task_user and task_user.password
         ]):
             raise ValueError(
                 "Cannot connect to Release API without server URL, username, or password. "

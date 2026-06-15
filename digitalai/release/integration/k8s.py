@@ -43,7 +43,20 @@ def get_client():
 
 
 def split_secret_resource_data(secret_entry: str) -> tuple:
+    """
+    Split a ``namespace:name:key`` secret reference into its three parts.
+
+    Raises:
+        ValueError: if ``secret_entry`` is empty or not in the expected
+            ``namespace:name:key`` form. Returning blanks silently here only
+            surfaces later as a confusing Kubernetes API error.
+    """
+    if not secret_entry:
+        raise ValueError("Secret resource reference is empty")
     split = secret_entry.split(":")
     if len(split) != 3:
-        return "", "", ""
+        raise ValueError(
+            f"Invalid secret resource reference '{secret_entry}', "
+            f"expected format 'namespace:name:key'"
+        )
     return tuple(split)
