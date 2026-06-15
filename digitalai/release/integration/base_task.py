@@ -162,24 +162,53 @@ class BaseTask(ABC):
         """
         return Ids.find_folder_id(self.get_release_id())
 
-    def get_release_api_client(self) -> ReleaseAPIClient:
+    def get_release_api_client(self,
+                               server_address: str = None,
+                               username: str = None,
+                               password: str = None,
+                               personal_access_token: str = None,
+                               **kwargs) -> ReleaseAPIClient:
         """
-        Returns a ReleaseAPIClient object with default configuration based on the task.
-        """
-        self._validate_api_credentials()
-        return ReleaseAPIClient(self.get_release_server_url(),
-                                self.get_task_user().username,
-                                self.get_task_user().password)
+        Returns a ReleaseAPIClient object.
 
-    def _validate_api_credentials(self) -> None:
+        All arguments are optional. When omitted, the client is configured from the
+        task context (server URL and the 'Run as user' credentials). Any argument
+        that is provided overrides the corresponding task default.
+
+        :param server_address: Optional Release server URL. Defaults to the task's server URL.
+        :param username: Optional username. Defaults to the task user's username.
+        :param password: Optional password. Defaults to the task user's password.
+        :param personal_access_token: Optional personal access token for authentication.
+        :param kwargs: Additional session parameters (e.g., headers, timeout).
+        """
+        task_user = self.get_task_user()
+        server_address = server_address or self.get_release_server_url()
+
+        if personal_access_token:
+            if not server_address:
+                raise ValueError(
+                    "Cannot connect to Release API without server URL. "
+                    "Make sure that the release server URL is available."
+                )
+            return ReleaseAPIClient(server_address,
+                                    personal_access_token=personal_access_token,
+                                    **kwargs)
+
+        username = username or (task_user and task_user.username)
+        password = password or (task_user and task_user.password)
+        self._validate_api_credentials(server_address, username, password)
+        return ReleaseAPIClient(server_address, username, password, **kwargs)
+
+    def _validate_api_credentials(self, server_address: str = None,
+                                  username: str = None, password: str = None) -> None:
         """
         Validates that the necessary credentials are available for connecting to the Release API.
         """
         task_user = self.get_task_user()
         if not all([
-            self.get_release_server_url(),
-            task_user and task_user.username,
-            task_user and task_user.password
+            server_address or self.get_release_server_url(),
+            username or (task_user and task_user.username),
+            password or (task_user and task_user.password)
         ]):
             raise ValueError(
                 "Cannot connect to Release API without server URL, username, or password. "

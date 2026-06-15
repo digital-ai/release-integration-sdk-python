@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from digitalai.release.integration.base_task import BaseTask
+from digitalai.release.integration.exceptions import AbortException
 from digitalai.release.integration.ids import Ids
 from digitalai.release.integration.input_context import (
     AutomatedTaskAsUserContext,
@@ -82,6 +83,19 @@ class TestBaseTaskOutput(unittest.TestCase):
         ctx = task.get_output_context()
         self.assertEqual(ctx.exit_code, 1)
         self.assertEqual(ctx.job_error_message, "boom")
+
+    def test_execute_task_handles_abort(self):
+        class _Abort(_StubTask):
+            def execute(self) -> None:
+                raise AbortException()
+
+        task = _Abort()
+        with self.assertRaises(SystemExit) as cm:
+            task.execute_task()
+        self.assertEqual(cm.exception.code, 1)
+        ctx = task.get_output_context()
+        self.assertEqual(ctx.exit_code, 1)
+        self.assertEqual(ctx.job_error_message, "Abort requested")
 
     def test_set_output_property_rejects_empty_name(self):
         task = self._task()
