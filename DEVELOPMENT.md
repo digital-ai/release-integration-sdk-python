@@ -1,6 +1,6 @@
 # Development
 
-This project uses [uv](https://docs.astral.sh/uv/) for dependency management and packaging.
+This project uses [`uv`](https://docs.astral.sh/uv/) for dependency management and packaging.
 
 ## Prerequisites
 
@@ -14,18 +14,39 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-## Common tasks
+## Set up a dev environment
 
 ```sh
-# Install dependencies (creates a virtual environment and installs dev tools)
-uv sync
+# Installs runtime + dev dependencies into a managed virtual environment
+uv sync --extra dev
+```
 
+## Build
+
+The wheel packages the `digitalai` tree.
+
+```sh
+# Build both sdist and wheel into ./dist
+uv build
+
+# Or build a single artifact
+uv build --wheel
+uv build --sdist
+```
+
+## Run tests
+
+```sh
 # Run the tests
 cd tests/release/integration
 uv run python -m unittest test_wrapper.py
+```
 
-# Build the distribution
-uv build
+## Publish to PyPI
+
+```sh
+# Publish the distribution (uploads everything in dist/ to PyPI)
+uv publish --token <pypi-token>
 ```
 
 ## Dependency management
