@@ -4,10 +4,9 @@ The **Digital.ai Release Python SDK** (`digitalai-release-sdk`) provides a set o
 
 ## Features
 - Define custom tasks using the `BaseTask` abstract class.
+- Subclass `ApiBaseTask` to get every Release v1 API as a cached property (`releaseApi`, `phaseApi`, `taskApi`, ...), all sharing one pre-configured client built from the task's "Run as user" context.
 - Easily manage input and output properties.
 - Interact with the Digital.ai Release environment seamlessly.
-- Simplified API client for efficient communication with Release API, with support for username/password or personal access token authentication.
-- Built-in helpers to resolve Release entity IDs (release, phase, task, and folder).
 
 
 ## Installation
@@ -16,6 +15,8 @@ Install the SDK using `pip`:
 ```sh
 pip install digitalai-release-sdk
 ```
+
+> **Note:** The SDK depends on [`digitalai-release-api-client`](https://pypi.org/project/digitalai-release-api-client/), which is installed automatically.
 
 ## Getting Started
 
@@ -44,12 +45,44 @@ class Hello(BaseTask):
         self.set_output_property('greeting', greeting)
 ```
 
+### Example Task using the Release API: `ApiBaseTask`
+
+Subclass `ApiBaseTask` to call the Release v1 REST API without building a client
+yourself. Every API is exposed as a lazily created, cached property, all sharing
+a single client built from the task's "Run as user" context:
+
+```python
+from digitalai.release.integration.api_base_task import ApiBaseTask
+
+
+class ShowVersion(ApiBaseTask):
+
+    def execute(self) -> None:
+        release = self.releaseApi.getRelease(self.get_release_id())
+        self.add_comment(f"Working on {release.title}")
+```
+
 ## Changelog
 
 ### Version 26.3.0 (Beta)
 
+#### ⚠️ Breaking Changes
+
+- **`ReleaseAPIClient` moved to the standalone [`digitalai-release-api-client`](https://pypi.org/project/digitalai-release-api-client/) package** so the API client can be used on its own. The SDK now depends on it and installs it automatically — only the import path changes (class names, method signatures, and behavior are unchanged):
+
+  ```python
+  # ❌ Old — bundled inside the SDK
+  from digitalai.release.release_api_client import ReleaseAPIClient
+
+  # ✅ New — provided by digitalai-release-api-client
+  from com.xebialabs.xlrelease.release_api_client import ReleaseAPIClient
+  ```
+
+  `BaseTask.get_release_api_client()` still returns a `ReleaseAPIClient` exactly as before.
+
 #### 🚀 Features
 
+- Added the `ApiBaseTask` base class, exposing every Release v1 API as a lazily created, cached property.
 - `get_release_api_client()` now supports optional credentials/server URL and `requests` library arguments.
 - Added `get_phase_id()` and `get_folder_id()` helper methods to `BaseTask`.
 

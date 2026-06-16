@@ -7,7 +7,7 @@ from .output_context import OutputContext
 from .exceptions import AbortException
 from .ids import Ids
 from .logger import dai_logger
-from digitalai.release.release_api_client import ReleaseAPIClient
+from com.xebialabs.xlrelease.release_api_client import ReleaseAPIClient
 
 
 class BaseTask(ABC):
@@ -167,6 +167,7 @@ class BaseTask(ABC):
                                username: str = None,
                                password: str = None,
                                personal_access_token: str = None,
+                               timeout: float | tuple[float, float] | None = None,
                                **kwargs) -> ReleaseAPIClient:
         """
         Returns a ReleaseAPIClient object.
@@ -179,7 +180,9 @@ class BaseTask(ABC):
         :param username: Optional username. Defaults to the task user's username.
         :param password: Optional password. Defaults to the task user's password.
         :param personal_access_token: Optional personal access token for authentication.
-        :param kwargs: Additional session parameters (e.g., headers, timeout).
+        :param timeout: Optional default timeout (in seconds) applied to every request.
+            Accepts a single float or a (connect, read) tuple. Can be overridden per call.
+        :param kwargs: Additional session parameters (e.g., headers).
         """
         task_user = self.get_task_user()
         server_address = server_address or self.get_release_server_url()
@@ -192,12 +195,13 @@ class BaseTask(ABC):
                 )
             return ReleaseAPIClient(server_address,
                                     personal_access_token=personal_access_token,
+                                    timeout=timeout,
                                     **kwargs)
 
         username = username or (task_user and task_user.username)
         password = password or (task_user and task_user.password)
         self._validate_api_credentials(server_address, username, password)
-        return ReleaseAPIClient(server_address, username, password, **kwargs)
+        return ReleaseAPIClient(server_address, username, password, timeout=timeout, **kwargs)
 
     def _validate_api_credentials(self, server_address: str = None,
                                   username: str = None, password: str = None) -> None:

@@ -150,7 +150,7 @@ class TestAutomatedTaskAsUser(unittest.TestCase):
         task = self._task("admin", "secret")
         with mock.patch("digitalai.release.integration.base_task.ReleaseAPIClient") as fake_client:
             client = task.get_release_api_client()
-        fake_client.assert_called_once_with(self.SERVER_URL, "admin", "secret")
+        fake_client.assert_called_once_with(self.SERVER_URL, "admin", "secret", timeout=None)
         self.assertIs(client, fake_client.return_value)
 
     def test_get_release_api_client_raises_when_password_missing(self):
