@@ -162,7 +162,7 @@ wheels = [
 
 [[package]]
 name = "digitalai-release-sdk"
-version = "26.3.0b2"
+version = "26.3.0b3"
 source = { editable = "." }
 dependencies = [
     { name = "dataclasses-json" },

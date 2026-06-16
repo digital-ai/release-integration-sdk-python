@@ -1,3 +1,4 @@
+import socket
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -78,6 +79,23 @@ API_PROPERTIES = {
 }
 
 
+# The live-call test below talks to a real Release server. Locally that is the
+# developer's instance on localhost:5516; CI has no such server, so the test is
+# skipped automatically when the port is not reachable.
+LIVE_SERVER_HOST = "localhost"
+LIVE_SERVER_PORT = 5516
+LIVE_SERVER_URL = f"http://{LIVE_SERVER_HOST}:{LIVE_SERVER_PORT}"
+
+
+def _server_reachable(host: str, port: int, timeout: float = 0.5) -> bool:
+    """Return True if a TCP connection to host:port succeeds within the timeout."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 class _SampleApiTask(ApiBaseTask):
     """Concrete ApiBaseTask used to exercise the base behaviour in tests."""
 
@@ -92,7 +110,7 @@ class TestApiBaseTask(unittest.TestCase):
         # Configure the task context the way the Release runtime would, so that
         # get_release_api_client() builds a client from the "Run as user" details.
         self.task = _SampleApiTask()
-        self.task.release_server_url = "http://localhost:5516"
+        self.task.release_server_url = LIVE_SERVER_URL
         self.task.release_context = ReleaseContext(
             id="Applications/Release0000000000000000000000000000",
             automated_task_as_user=AutomatedTaskAsUserContext(
@@ -141,6 +159,10 @@ class TestApiBaseTask(unittest.TestCase):
         self.assertIsNot(self.task.apiClient, old_client)
         self.assertIsNot(self.task.releaseApi, old_release_api)
 
+    @unittest.skipUnless(
+        _server_reachable(LIVE_SERVER_HOST, LIVE_SERVER_PORT),
+        f"live Release server not available on {LIVE_SERVER_HOST}:{LIVE_SERVER_PORT}",
+    )
     def test_wired_client_performs_live_call(self):
         """A property built by ApiBaseTask can talk to the live server."""
         info = self.task.settingsApi.getInstanceInformation()
