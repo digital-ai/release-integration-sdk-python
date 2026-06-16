@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build]
 exclude = [
-  ".gitignore", "tests/*", ".github/*", "DEVELOPMENT.md", "ROBUSTNESS_CHANGES.md", "uv.lock"
+  ".gitignore", "tests/*", ".github/*", "DEVELOPMENT.md", "uv.lock"
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -12,7 +12,7 @@ packages = ["digitalai"]
 
 [project]
 name = "digitalai_release_sdk"
-version = "26.1.0"
+version = "26.3.0b1"
 authors = [
   { name="Digital.ai", email="pypi-devops@digital.ai" },
 ]
@@ -27,7 +27,7 @@ dependencies = [
     'kubernetes>=35.0.0, <36.0.0'
 ]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Topic :: Software Development :: Libraries",
     "Programming Language :: Python :: 3",

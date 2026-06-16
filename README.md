@@ -6,7 +6,8 @@ The **Digital.ai Release Python SDK** (`digitalai-release-sdk`) provides a set o
 - Define custom tasks using the `BaseTask` abstract class.
 - Easily manage input and output properties.
 - Interact with the Digital.ai Release environment seamlessly.
-- Simplified API client for efficient communication with Release API.
+- Simplified API client for efficient communication with Release API, with support for username/password or personal access token authentication.
+- Built-in helpers to resolve Release entity IDs (release, phase, task, and folder).
 
 
 ## Installation
@@ -45,13 +46,16 @@ class Hello(BaseTask):
 
 ## Changelog
 
-### Version 26.1.0
+### Version 26.3.0 (Beta)
+
+#### 🚀 Features
+
+- `get_release_api_client()` now supports optional credentials/server URL and `requests` library arguments.
+- Added `get_phase_id()` and `get_folder_id()` helper methods to `BaseTask`.
 
 #### 🛠️ Enhancements
 
-- Updated minimum Python version requirement to **3.10**.
-- Updated dependency versions to enhance compatibility and security.
-- Added support for the **scriptLocation** hidden property to explicitly define the task script path, improving performance and file organization.
+- Improved stability and error handling for API requests and Kubernetes tasks.
 
 ---
 
