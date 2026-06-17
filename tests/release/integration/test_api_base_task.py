@@ -9,7 +9,7 @@ from digitalai.release.integration.input_context import (
 )
 from digitalai.release.integration.api_base_task import ApiBaseTask
 
-from com.xebialabs.xlrelease.release_api_client import ReleaseAPIClient
+from digitalai.release.release_api_client import ReleaseAPIClient
 from com.xebialabs.xlrelease.api.v1.activity_logs_api import ActivityLogsApi
 from com.xebialabs.xlrelease.api.v1.application_api import ApplicationApi
 from com.xebialabs.xlrelease.api.v1.archive_api import ArchiveApi

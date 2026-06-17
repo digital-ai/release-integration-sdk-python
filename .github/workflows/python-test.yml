@@ -23,4 +23,4 @@ jobs:
     - name: Install dependencies
       run: uv sync --frozen --extra dev
     - name: Run tests
-      run: uv run --project ${{ github.workspace }} python -m pytest tests/release/integration -v
+      run: uv run --project ${{ github.workspace }} python -m pytest tests -v

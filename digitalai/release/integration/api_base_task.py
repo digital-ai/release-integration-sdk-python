@@ -2,7 +2,7 @@ from typing import Dict, Type, TypeVar
 
 from digitalai.release.integration.base_task import BaseTask
 
-from com.xebialabs.xlrelease.release_api_client import ReleaseAPIClient
+from digitalai.release.release_api_client import ReleaseAPIClient
 from com.xebialabs.xlrelease.domain.folder import Folder
 from com.xebialabs.xlrelease.domain.phase import Phase
 from com.xebialabs.xlrelease.domain.release import Release

@@ -66,20 +66,6 @@ class ShowVersion(ApiBaseTask):
 
 ### Version 26.3.0 (Beta)
 
-#### ⚠️ Breaking Changes
-
-- **`ReleaseAPIClient` moved to the standalone [`digitalai-release-api-client`](https://pypi.org/project/digitalai-release-api-client/) package** so the API client can be used on its own. The SDK now depends on it and installs it automatically — only the import path changes (class names, method signatures, and behavior are unchanged):
-
-  ```python
-  # ❌ Old — bundled inside the SDK
-  from digitalai.release.release_api_client import ReleaseAPIClient
-
-  # ✅ New — provided by digitalai-release-api-client
-  from com.xebialabs.xlrelease.release_api_client import ReleaseAPIClient
-  ```
-
-  `BaseTask.get_release_api_client()` still returns a `ReleaseAPIClient` exactly as before.
-
 #### 🚀 Features
 
 - Added the `ApiBaseTask` base class, exposing every Release v1 API as a lazily created, cached property.

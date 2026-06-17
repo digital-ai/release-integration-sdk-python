@@ -7,7 +7,7 @@ from .output_context import OutputContext
 from .exceptions import AbortException
 from .ids import Ids
 from .logger import dai_logger
-from com.xebialabs.xlrelease.release_api_client import ReleaseAPIClient
+from digitalai.release.release_api_client import ReleaseAPIClient
 
 
 class BaseTask(ABC):
