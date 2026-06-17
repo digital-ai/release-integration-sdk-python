@@ -62,6 +62,18 @@ class ShowVersion(ApiBaseTask):
         self.add_comment(f"Working on {release.title}")
 ```
 
+## 🔗 Related Resources
+
+- **[Digital.ai Python SDK Documentation](https://docs.digital.ai/release/docs/how-to/overview-python-sdk)**:   
+  Comprehensive guide to using the Python SDK and building custom tasks.
+
+- **[SDK Template Project for integration plugins](https://github.com/digital-ai/release-integration-template-python)**:   
+  A starting point for building custom integrations using Digital.ai Release and Python.
+
+- **[Digital.ai Release Python SDK](https://pypi.org/project/digitalai-release-sdk/)**:
+  The official SDK package for integrating with Digital.ai Release on Pypi. 
+
+
 ## Changelog
 
 ### Version 26.3.0 (Beta)
@@ -75,18 +87,4 @@ class ShowVersion(ApiBaseTask):
 #### 🛠️ Enhancements
 
 - Improved stability and error handling for API requests and Kubernetes tasks.
-
----
-
-## 🔗 Related Resources
-
-- 🧪 **Python Template Project**: [release-integration-template-python](https://github.com/digital-ai/release-integration-template-python)  
-  A starting point for building custom integrations using Digital.ai Release and Python.
-
-- 📘 **Official Documentation**: [Digital.ai Release Python SDK Docs](https://docs.digital.ai/release/docs/category/python-sdk)  
-  Comprehensive guide to using the Python SDK and building custom tasks.
-
-- 📦 **Digital.ai Release Python SDK**: [digitalai-release-sdk on PyPI](https://pypi.org/project/digitalai-release-sdk/)  
-  The official SDK package for integrating with Digital.ai Release.
-
 
