@@ -4,7 +4,7 @@ The **Digital.ai Release Python SDK** (`digitalai-release-sdk`) provides a set o
 
 ## Features
 - Define custom tasks using the `BaseTask` abstract class.
-- Subclass `ApiBaseTask` to get every Release v1 API as a cached property (`releaseApi`, `phaseApi`, `taskApi`, ...), all sharing one pre-configured client built from the task's "Run as user" context.
+- Subclass `ApiBaseTask` to access the Release APIs (`releaseApi`, `phaseApi`, `taskApi`, ...) through a ready-to-use client.
 - Easily manage input and output properties.
 - Interact with the Digital.ai Release environment seamlessly.
 
