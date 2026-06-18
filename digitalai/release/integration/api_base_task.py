@@ -1,4 +1,4 @@
-from typing import Dict, Type, TypeVar
+from typing import Any, Dict, Type, TypeVar
 
 from digitalai.release.integration.base_task import BaseTask
 
@@ -7,6 +7,7 @@ from com.xebialabs.xlrelease.domain.folder import Folder
 from com.xebialabs.xlrelease.domain.phase import Phase
 from com.xebialabs.xlrelease.domain.release import Release
 from com.xebialabs.xlrelease.domain.task import Task
+from com.xebialabs.xlrelease.domain.variable import Variable
 
 from com.xebialabs.xlrelease.api.v1.activity_logs_api import ActivityLogsApi
 from com.xebialabs.xlrelease.api.v1.application_api import ApplicationApi
@@ -251,6 +252,237 @@ class ApiBaseTask(BaseTask):
         ``folderApi``.
         """
         return self.folderApi.getFolder(self.get_folder_id())
+
+    def getReleaseVariable(self, name: str) -> Any:
+        """
+        Return the value of a variable in the current release by name.
+
+        The Python3 equivalent of the Jython script global
+        ``releaseVariables[name]``. Pass the bare variable name (e.g.
+        ``"JenkinsBuildNumber"``). The variable is looked up by its ``key`` via
+        ``releaseApi.getVariables`` and its stored value returned as-is.
+
+        :param name: the variable name (e.g. ``"JenkinsBuildNumber"``).
+        :return: the variable's value.
+        :raises KeyError: if the release has no variable with that name.
+        """
+        variables = self.releaseApi.getVariables(self.get_release_id())
+        variable = next((v for v in variables if v.key == name), None)
+        if variable is None:
+            raise KeyError(
+                f"No variable named {name} in the current release; "
+                f"available: {sorted(v.key for v in variables)}")
+        return variable.value
+
+    def setReleaseVariable(self, name: str, value: Any) -> Variable:
+        """
+        Set the value of a variable in the current release by name.
+
+        The Python3 equivalent of the Jython script assignment
+        ``releaseVariables[name] = value``. Pass the bare variable name (e.g.
+        ``"JenkinsBuildNumber"``). The variable is looked up by its ``key`` in
+        the current release; if it exists its value is persisted via
+        ``releaseApi.updateVariable``, otherwise a new variable is created via
+        ``releaseApi.createVariable``. The new variable's type is inferred from
+        ``value`` (see :meth:`_variable_type_for_value`).
+
+        :param name: the variable name (e.g. ``"JenkinsBuildNumber"``).
+        :param value: the new value to assign.
+        :return: the updated (or newly created) variable.
+        """
+        release_id = self.get_release_id()
+        variables = self.releaseApi.getVariables(release_id)
+        variable = next((v for v in variables if v.key == name), None)
+        if variable is None:
+            return self.releaseApi.createVariable(
+                release_id, self._new_variable(name, value))
+        variable.value = self._coerce_value(value)
+        return self.releaseApi.updateVariable(variable.id, variable)
+
+    def getFolderVariable(self, name: str) -> Any:
+        """
+        Return the value of a variable in the current folder by name.
+
+        Like :meth:`getReleaseVariable`, but scoped to the folder that contains
+        the current release. Inherited variables (from parent folders and global
+        variables) are included, mirroring what a release actually resolves.
+
+        Folder variables are stored with a ``folder.`` prefix, which is
+        required here: pass the fully qualified name (e.g. ``"folder.foo"``).
+
+        :param name: the variable name, including the ``folder.`` prefix.
+        :return: the variable's value.
+        :raises ValueError: if ``name`` does not start with ``folder.``.
+        :raises KeyError: if no such variable is visible to the folder.
+        """
+        key = self._folder_key(name)
+        variables = self.folderApi.listVariables(self.get_folder_id())
+        variable = next((v for v in variables if v.key == key), None)
+        if variable is None:
+            raise KeyError(
+                f"No variable named {key} visible to the current folder; "
+                f"available: {sorted(v.key for v in variables)}")
+        return variable.value
+
+    def setFolderVariable(self, name: str, value: Any) -> Variable:
+        """
+        Set the value of a variable owned by the current folder by name.
+
+        Only variables the folder owns are matched: an inherited variable
+        (defined on a parent folder or as a global variable) is not. If the
+        folder owns the variable its value is persisted via
+        ``folderApi.updateVariable``; otherwise a new folder-owned variable is
+        created via ``folderApi.createVariable``. The new variable's type is
+        inferred from ``value`` (see :meth:`_variable_type_for_value`). Creating
+        a variable whose name matches an inherited one yields a folder-owned
+        variable that shadows the inherited value.
+
+        The ``folder.`` prefix is required (see :meth:`getFolderVariable`).
+
+        :param name: the variable name, including the ``folder.`` prefix.
+        :param value: the new value to assign.
+        :return: the updated (or newly created) variable.
+        :raises ValueError: if ``name`` does not start with ``folder.``.
+        """
+        folder_id = self.get_folder_id()
+        key = self._folder_key(name)
+        variables = self.folderApi.listVariables(folder_id, folderOnly=True)
+        variable = next((v for v in variables if v.key == key), None)
+        if variable is None:
+            return self.folderApi.createVariable(
+                folder_id, self._new_variable(key, value))
+        variable.value = self._coerce_value(value)
+        return self.folderApi.updateVariable(folder_id, variable.id, variable)
+
+    def getGlobalVariable(self, name: str) -> Any:
+        """
+        Return the value of a global variable by name.
+
+        Global variables are stored with a ``global.`` prefix, which is
+        required here: pass the fully qualified name (e.g. ``"global.foo"``).
+
+        :param name: the global variable name, including the ``global.`` prefix.
+        :return: the variable's value.
+        :raises ValueError: if ``name`` does not start with ``global.``.
+        :raises KeyError: if no global variable with that name exists.
+        """
+        key = self._global_key(name)
+        variables = self.configurationApi.getGlobalVariables()
+        variable = next((v for v in variables if v.key == key), None)
+        if variable is None:
+            raise KeyError(
+                f"No global variable named {key}; "
+                f"available: {sorted(v.key for v in variables)}")
+        return variable.value
+
+    def setGlobalVariable(self, name: str, value: Any) -> Variable:
+        """
+        Set the value of a global variable by name.
+
+        The ``global.`` prefix is required (see :meth:`getGlobalVariable`). If
+        the variable exists its value is persisted via
+        ``configurationApi.updateGlobalVariable``; otherwise a new global
+        variable is created via ``configurationApi.addGlobalVariable``, with its
+        type inferred from ``value`` (see :meth:`_variable_type_for_value`). The
+        task's run-as user must hold the permission to edit global variables.
+
+        :param name: the global variable name, including the ``global.`` prefix.
+        :param value: the new value to assign.
+        :return: the updated (or newly created) variable.
+        :raises ValueError: if ``name`` does not start with ``global.``.
+        """
+        key = self._global_key(name)
+        variables = self.configurationApi.getGlobalVariables()
+        variable = next((v for v in variables if v.key == key), None)
+        if variable is None:
+            return self.configurationApi.addGlobalVariable(
+                self._new_variable(key, value))
+        variable.value = self._coerce_value(value)
+        return self.configurationApi.updateGlobalVariable(variable.id, variable)
+
+    @staticmethod
+    def _global_key(name: str) -> str:
+        """
+        Validate and return the stored ``key`` of a global variable.
+
+        The ``global.`` prefix is required: ``name`` is returned unchanged, but
+        a :class:`ValueError` is raised when it is missing.
+        """
+        if not name.startswith("global."):
+            raise ValueError(
+                f"Global variable name must include the 'global.' prefix; "
+                f"got {name!r}.")
+        return name
+
+    @staticmethod
+    def _folder_key(name: str) -> str:
+        """
+        Validate and return the stored ``key`` of a folder variable.
+
+        The ``folder.`` prefix is required: ``name`` is returned unchanged, but
+        a :class:`ValueError` is raised when it is missing.
+        """
+        if not name.startswith("folder."):
+            raise ValueError(
+                f"Folder variable name must include the 'folder.' prefix; "
+                f"got {name!r}.")
+        return name
+
+    @staticmethod
+    def _coerce_value(value: Any) -> Any:
+        """
+        Return ``value`` in a JSON-serializable form for a variable payload.
+
+        Sets and tuples (natural Python types for a set-of-string variable) are
+        converted to lists; everything else is passed through unchanged.
+        """
+        if isinstance(value, (set, tuple)):
+            return list(value)
+        return value
+
+    @staticmethod
+    def _variable_type_for_value(value: Any) -> str:
+        """
+        Infer the Release variable ``type`` to use for a new variable from the
+        Python type of ``value``.
+
+        ====================  ======================================
+        Python value          Variable type
+        ====================  ======================================
+        ``bool``              ``xlrelease.BooleanVariable``
+        ``int``               ``xlrelease.IntegerVariable``
+        ``dict``              ``xlrelease.MapStringStringVariable``
+        ``list``/``set``/     ``xlrelease.SetStringVariable``
+        ``tuple``
+        anything else         ``xlrelease.StringVariable``
+        ====================  ======================================
+
+        ``bool`` is checked before ``int`` because ``bool`` is a subclass of
+        ``int`` in Python.
+        """
+        if isinstance(value, bool):
+            return "xlrelease.BooleanVariable"
+        if isinstance(value, int):
+            return "xlrelease.IntegerVariable"
+        if isinstance(value, dict):
+            return "xlrelease.MapStringStringVariable"
+        if isinstance(value, (list, set, tuple)):
+            return "xlrelease.SetStringVariable"
+        return "xlrelease.StringVariable"
+
+    @classmethod
+    def _new_variable(cls, key: str, value: Any) -> Variable:
+        """
+        Build a :class:`Variable` to create for ``key``/``value``, inferring the
+        ``type`` from ``value`` and coercing the value to a serializable form.
+        """
+        return Variable(
+            type=cls._variable_type_for_value(value),
+            key=key,
+            value=cls._coerce_value(value),
+            requiresValue=False,
+            showOnReleaseStart=False,
+        )
 
     def getTasksByTitle(self, taskTitle: str, phaseTitle: str | None = None,
                         releaseId: str | None = None) -> list[Task]:
