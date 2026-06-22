@@ -1,11 +1,11 @@
-import logging
 import sys
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from .input_context import AutomatedTaskAsUserContext
 from .output_context import OutputContext
 from .exceptions import AbortException
+from .ids import Ids
 from .logger import dai_logger
 from digitalai.release.release_api_client import ReleaseAPIClient
 
@@ -128,10 +128,13 @@ class BaseTask(ABC):
         """
         return self.release_server_url
 
-    def get_task_user(self) -> AutomatedTaskAsUserContext:
+    def get_task_user(self) -> Optional[AutomatedTaskAsUserContext]:
         """
-        Returns the user details that are executing the task.
+        Returns the user details that are executing the task, or ``None`` when no
+        release context is available.
         """
+        if not self.release_context:
+            return None
         return self.release_context.automated_task_as_user
 
     def get_release_id(self) -> str:
@@ -146,23 +149,70 @@ class BaseTask(ABC):
         """
         return self.task_id
 
-    def get_release_api_client(self) -> ReleaseAPIClient:
+    def get_phase_id(self) -> str:
         """
-        Returns a ReleaseAPIClient object with default configuration based on the task.
+        Returns the Phase ID of the task, derived from the task id.
         """
-        self._validate_api_credentials()
-        return ReleaseAPIClient(self.get_release_server_url(),
-                                self.get_task_user().username,
-                                self.get_task_user().password)
+        return Ids.phase_id_from(self.get_task_id())
 
-    def _validate_api_credentials(self) -> None:
+    def get_folder_id(self) -> str:
+        """
+        Returns the ID of the folder that contains the release, derived from the
+        release id.
+        """
+        return Ids.find_folder_id(self.get_release_id())
+
+    def get_release_api_client(self,
+                               server_address: str = None,
+                               username: str = None,
+                               password: str = None,
+                               personal_access_token: str = None,
+                               timeout: float | tuple[float, float] | None = None,
+                               **kwargs) -> ReleaseAPIClient:
+        """
+        Returns a ReleaseAPIClient object.
+
+        All arguments are optional. When omitted, the client is configured from the
+        task context (server URL and the 'Run as user' credentials). Any argument
+        that is provided overrides the corresponding task default.
+
+        :param server_address: Optional Release server URL. Defaults to the task's server URL.
+        :param username: Optional username. Defaults to the task user's username.
+        :param password: Optional password. Defaults to the task user's password.
+        :param personal_access_token: Optional personal access token for authentication.
+        :param timeout: Optional default timeout (in seconds) applied to every request.
+            Accepts a single float or a (connect, read) tuple. Can be overridden per call.
+        :param kwargs: Additional session parameters (e.g., headers).
+        """
+        task_user = self.get_task_user()
+        server_address = server_address or self.get_release_server_url()
+
+        if personal_access_token:
+            if not server_address:
+                raise ValueError(
+                    "Cannot connect to Release API without server URL. "
+                    "Make sure that the release server URL is available."
+                )
+            return ReleaseAPIClient(server_address,
+                                    personal_access_token=personal_access_token,
+                                    timeout=timeout,
+                                    **kwargs)
+
+        username = username or (task_user and task_user.username)
+        password = password or (task_user and task_user.password)
+        self._validate_api_credentials(server_address, username, password)
+        return ReleaseAPIClient(server_address, username, password, timeout=timeout, **kwargs)
+
+    def _validate_api_credentials(self, server_address: str = None,
+                                  username: str = None, password: str = None) -> None:
         """
         Validates that the necessary credentials are available for connecting to the Release API.
         """
+        task_user = self.get_task_user()
         if not all([
-            self.get_release_server_url(),
-            self.get_task_user().username,
-            self.get_task_user().password
+            server_address or self.get_release_server_url(),
+            username or (task_user and task_user.username),
+            password or (task_user and task_user.password)
         ]):
             raise ValueError(
                 "Cannot connect to Release API without server URL, username, or password. "

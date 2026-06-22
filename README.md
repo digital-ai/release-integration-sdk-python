@@ -4,9 +4,9 @@ The **Digital.ai Release Python SDK** (`digitalai-release-sdk`) provides a set o
 
 ## Features
 - Define custom tasks using the `BaseTask` abstract class.
+- Subclass `ApiBaseTask` to access the Release APIs (`releaseApi`, `phaseApi`, `taskApi`, ...) through a ready-to-use client.
 - Easily manage input and output properties.
 - Interact with the Digital.ai Release environment seamlessly.
-- Simplified API client for efficient communication with Release API.
 
 
 ## Installation
@@ -15,6 +15,8 @@ Install the SDK using `pip`:
 ```sh
 pip install digitalai-release-sdk
 ```
+
+> **Note:** The SDK depends on [`digitalai-release-api-client`](https://pypi.org/project/digitalai-release-api-client/), which is installed automatically.
 
 ## Getting Started
 
@@ -43,27 +45,46 @@ class Hello(BaseTask):
         self.set_output_property('greeting', greeting)
 ```
 
-## Changelog
+### Example Task using the Release API: `ApiBaseTask`
 
-### Version 26.1.0
+Subclass `ApiBaseTask` to call the Release v1 REST API without building a client
+yourself. Every API is exposed as a lazily created, cached property, all sharing
+a single client built from the task's "Run as user" context:
 
-#### 🛠️ Enhancements
+```python
+from digitalai.release.integration.api_base_task import ApiBaseTask
 
-- Updated minimum Python version requirement to **3.10**.
-- Updated dependency versions to enhance compatibility and security.
-- Added support for the **scriptLocation** hidden property to explicitly define the task script path, improving performance and file organization.
 
----
+class ShowVersion(ApiBaseTask):
+
+    def execute(self) -> None:
+        release = self.releaseApi.getRelease(self.get_release_id())
+        self.add_comment(f"Working on {release.title}")
+```
 
 ## 🔗 Related Resources
 
-- 🧪 **Python Template Project**: [release-integration-template-python](https://github.com/digital-ai/release-integration-template-python)  
-  A starting point for building custom integrations using Digital.ai Release and Python.
-
-- 📘 **Official Documentation**: [Digital.ai Release Python SDK Docs](https://docs.digital.ai/release/docs/category/python-sdk)  
+- **[Digital.ai Python SDK Documentation](https://docs.digital.ai/release/docs/how-to/overview-python-sdk)**:   
   Comprehensive guide to using the Python SDK and building custom tasks.
 
-- 📦 **Digital.ai Release Python SDK**: [digitalai-release-sdk on PyPI](https://pypi.org/project/digitalai-release-sdk/)  
-  The official SDK package for integrating with Digital.ai Release.
+- **[SDK Template Project for integration plugins](https://github.com/digital-ai/release-integration-template-python)**:   
+  A starting point for building custom integrations using Digital.ai Release and Python.
 
+- **[Digital.ai Release Python SDK](https://pypi.org/project/digitalai-release-sdk/)**:
+  The official SDK package for integrating with Digital.ai Release on Pypi. 
+
+
+## Changelog
+
+### Version 26.3.0 (Beta)
+
+#### 🚀 Features
+
+- Added the `ApiBaseTask` base class, exposing every Release v1 API as a lazily created, cached property.
+- `get_release_api_client()` now supports optional credentials/server URL and `requests` library arguments.
+- Added `get_phase_id()` and `get_folder_id()` helper methods to `BaseTask`.
+
+#### 🛠️ Enhancements
+
+- Improved stability and error handling for API requests and Kubernetes tasks.
 

@@ -45,9 +45,14 @@ class MaskedIO(TextIOWrapper):
 
         Args:
             s (str): The string to write.
+
+        Returns:
+            int: The number of characters of the original string written, as
+            required by the ``TextIOBase.write`` contract.
         """
         d = s
         for secret in self.secrets:
             if secret:
-                d = d.replace(secret, '********')
+                d = d.replace(str(secret), '********')
         self.buffer.write(d)
+        return len(s)
