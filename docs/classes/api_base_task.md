@@ -167,13 +167,16 @@ _No parameters._
 Returns the value of a variable in the current release by name. The Python3
 equivalent of the Jython script global `releaseVariables[name]`. Pass the bare
 variable name; the variable is looked up by its `key` and its stored value is
-returned as-is.
+returned as-is. A **reference variable** holds no literal value — the server
+resolves it from its value provider — so its value is read from the
+server-resolved value map instead, matching the Jython behaviour. **Password
+variables** never return their secret — the server masks the value as `********`.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `name` | `str` | _required_ | the variable name (e.g. `"JenkinsBuildNumber"`). |
 
-**Returns:** `Any` — the variable's value.
+**Returns:** `Any` — the variable's value (server-resolved for reference variables; `********` for password variables).
 
 **Raises:** `KeyError` — if the release has no variable with that name.
 
@@ -200,8 +203,10 @@ with its type inferred from `value`.
 Returns the value of a variable in the current folder by name. Like
 [`getReleaseVariable`](#getreleasevariable), but scoped to the folder that
 contains the current release. Inherited variables (from parent folders and
-global variables) are included. The `folder.` prefix is required — pass the
-fully qualified name (e.g. `"folder.foo"`).
+global variables) are included. Reference variables are resolved from the
+server-resolved value map (see [`getReleaseVariable`](#getreleasevariable)), and
+password variables come back masked as `********`. The `folder.` prefix is
+required — pass the fully qualified name (e.g. `"folder.foo"`).
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -236,7 +241,9 @@ inherited value of the same name). The `folder.` prefix is required.
 
 Returns the value of a global variable by name. Global variables are stored with
 a `global.` prefix, which is required here — pass the fully qualified name (e.g.
-`"global.foo"`).
+`"global.foo"`). Reference variables are resolved from the server-resolved value
+map (see [`getReleaseVariable`](#getreleasevariable)), and password variables
+come back masked as `********`.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|

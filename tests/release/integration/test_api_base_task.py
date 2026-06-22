@@ -194,7 +194,8 @@ class TestApiBaseTaskContextHelpers(unittest.TestCase):
         task._api_instances = {}
 
         apis = {name: MagicMock(name=name) for name in (
-            "releaseApi", "taskApi", "phaseApi", "folderApi", "settingsApi")}
+            "releaseApi", "taskApi", "phaseApi", "folderApi", "settingsApi",
+            "configurationApi")}
         for name, stub in apis.items():
             setattr(type(task), name, property(lambda self, s=stub: s))
         self.addCleanup(
@@ -250,6 +251,63 @@ class TestApiBaseTaskContextHelpers(unittest.TestCase):
             "product": "Digital.ai Release", "edition": "enterprise", "version": "25.3.0"}
 
         self.assertEqual(task.getVersion(), "25.3.0")
+
+    # -- reference-variable resolution --------------------------------------
+
+    def test_get_release_variable_returns_stored_value_for_plain_variable(self):
+        """A non-reference variable returns its stored value without resolving."""
+        task, apis = self._stub_task()
+        apis["releaseApi"].getVariables.return_value = [
+            SimpleNamespace(key="relVar", value="hello", type="xlrelease.StringVariable")]
+
+        self.assertEqual(task.getReleaseVariable("relVar"), "hello")
+        # No need to consult the resolved-value map for a literal value.
+        apis["releaseApi"].getVariableValues.assert_not_called()
+
+    def test_get_release_variable_resolves_reference(self):
+        """A reference variable's value comes from the server-resolved map."""
+        task, apis = self._stub_task()
+        # The reference variable itself carries no literal value.
+        apis["releaseApi"].getVariables.return_value = [
+            SimpleNamespace(key="refVar", value="", type="xlrelease.ReferenceVariable")]
+        apis["releaseApi"].getVariableValues.return_value = {"${refVar}": "resolved-value"}
+
+        self.assertEqual(task.getReleaseVariable("refVar"), "resolved-value")
+        apis["releaseApi"].getVariableValues.assert_called_once_with(RELEASE_ID)
+
+    def test_get_folder_variable_resolves_reference(self):
+        """A reference folder variable resolves via listVariableValues."""
+        task, apis = self._stub_task()
+        apis["folderApi"].listVariables.return_value = [
+            SimpleNamespace(key="folder.refVar", value="",
+                            type="xlrelease.ReferenceVariable")]
+        apis["folderApi"].listVariableValues.return_value = {
+            "${folder.refVar}": "folder-resolved"}
+
+        self.assertEqual(task.getFolderVariable("folder.refVar"), "folder-resolved")
+        apis["folderApi"].listVariableValues.assert_called_once_with(FOLDER_ID)
+
+    def test_get_global_variable_resolves_reference(self):
+        """A reference global variable resolves via getGlobalVariableValues."""
+        task, apis = self._stub_task()
+        apis["configurationApi"].getGlobalVariables.return_value = [
+            SimpleNamespace(key="global.refVar", value="",
+                            type="xlrelease.ReferenceVariable")]
+        apis["configurationApi"].getGlobalVariableValues.return_value = {
+            "${global.refVar}": "global-resolved"}
+
+        self.assertEqual(task.getGlobalVariable("global.refVar"), "global-resolved")
+        apis["configurationApi"].getGlobalVariableValues.assert_called_once_with()
+
+    def test_reference_resolution_falls_back_to_stored_value(self):
+        """When the resolved map lacks the token, the stored value is returned."""
+        task, apis = self._stub_task()
+        apis["releaseApi"].getVariables.return_value = [
+            SimpleNamespace(key="refVar", value="stored",
+                            type="xlrelease.ReferenceVariable")]
+        apis["releaseApi"].getVariableValues.return_value = {}
+
+        self.assertEqual(task.getReleaseVariable("refVar"), "stored")
 
 
 if __name__ == "__main__":

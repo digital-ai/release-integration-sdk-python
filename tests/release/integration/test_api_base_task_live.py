@@ -212,6 +212,19 @@ class TestApiBaseTaskLive(unittest.TestCase):
                 showOnReleaseStart=False,
             ),
         )
+        # A reference release variable. It holds no literal value -- the server
+        # resolves it from a value provider -- so getReleaseVariable must read
+        # its value from the server-resolved value map rather than `.value`.
+        template_api.createVariable(
+            root_template.id,
+            Variable(
+                type="xlrelease.ReferenceVariable",
+                key="relRefVar",
+                referencedType="xlrelease.StringVariable",
+                requiresValue=False,
+                showOnReleaseStart=False,
+            ),
+        )
 
         # Move the template into the folder so releases created from it live
         # inside the folder (required for getCurrentFolder to resolve).
@@ -412,6 +425,24 @@ class TestApiBaseTaskLive(unittest.TestCase):
         self.assertEqual(updated.value, new_value)
         self.assertEqual(self.task.getReleaseVariable("relMapVar"), new_value)
         print(f"setReleaseVariable('relMapVar') -> {new_value}")
+
+    # -- release variables: reference ---------------------------------------
+
+    def test_08h_get_release_reference_variable(self):
+        """getReleaseVariable returns a reference variable's server-resolved value.
+
+        A reference variable carries no literal value (``.value`` is empty); the
+        getter must read it from the resolved value map. The reference here has
+        no real provider target, so it resolves to an empty string -- but the
+        getter must return exactly what the resolved map holds for ``${key}``,
+        proving it delegates resolution to the server rather than returning the
+        raw (empty) ``.value``.
+        """
+        resolved = self.task.releaseApi.getVariableValues(self.release_id)
+        expected = resolved.get("${relRefVar}")
+        self.assertIsNotNone(expected, "reference variable missing from value map")
+        self.assertEqual(self.task.getReleaseVariable("relRefVar"), expected)
+        print(f"getReleaseVariable('relRefVar') -> {expected!r} (server-resolved)")
 
     # -- release variables: create when missing -----------------------------
 

@@ -262,16 +262,27 @@ class ApiBaseTask(BaseTask):
         ``"JenkinsBuildNumber"``). The variable is looked up by its ``key`` via
         ``releaseApi.getVariables`` and its stored value returned as-is.
 
+        A reference variable holds no literal value -- the server resolves it
+        from its value provider -- so its value is read from the server-resolved
+        value map (``releaseApi.getVariableValues``) instead, matching Jython.
+
+        Password variables never return their secret: the server masks the value
+        as ``********``.
+
         :param name: the variable name (e.g. ``"JenkinsBuildNumber"``).
-        :return: the variable's value.
+        :return: the variable's value (masked as ``********`` for password variables).
         :raises KeyError: if the release has no variable with that name.
         """
-        variables = self.releaseApi.getVariables(self.get_release_id())
+        release_id = self.get_release_id()
+        variables = self.releaseApi.getVariables(release_id)
         variable = next((v for v in variables if v.key == name), None)
         if variable is None:
             raise KeyError(
                 f"No variable named {name} in the current release; "
                 f"available: {sorted(v.key for v in variables)}")
+        if self._is_reference_variable(variable):
+            return self._resolve_from_values(
+                variable, self.releaseApi.getVariableValues(release_id))
         return variable.value
 
     def setReleaseVariable(self, name: str, value: Any) -> Variable:
@@ -312,16 +323,23 @@ class ApiBaseTask(BaseTask):
 
         :param name: the variable name, including the ``folder.`` prefix.
         :return: the variable's value.
+        Password variables never return their secret: the server masks the value
+        as ``********``.
+
         :raises ValueError: if ``name`` does not start with ``folder.``.
         :raises KeyError: if no such variable is visible to the folder.
         """
         key = self._folder_key(name)
-        variables = self.folderApi.listVariables(self.get_folder_id())
+        folder_id = self.get_folder_id()
+        variables = self.folderApi.listVariables(folder_id)
         variable = next((v for v in variables if v.key == key), None)
         if variable is None:
             raise KeyError(
                 f"No variable named {key} visible to the current folder; "
                 f"available: {sorted(v.key for v in variables)}")
+        if self._is_reference_variable(variable):
+            return self._resolve_from_values(
+                variable, self.folderApi.listVariableValues(folder_id))
         return variable.value
 
     def setFolderVariable(self, name: str, value: Any) -> Variable:
@@ -361,8 +379,11 @@ class ApiBaseTask(BaseTask):
         Global variables are stored with a ``global.`` prefix, which is
         required here: pass the fully qualified name (e.g. ``"global.foo"``).
 
+        Password variables never return their secret: the server masks the value
+        as ``********``.
+
         :param name: the global variable name, including the ``global.`` prefix.
-        :return: the variable's value.
+        :return: the variable's value (masked as ``********`` for password variables).
         :raises ValueError: if ``name`` does not start with ``global.``.
         :raises KeyError: if no global variable with that name exists.
         """
@@ -373,6 +394,9 @@ class ApiBaseTask(BaseTask):
             raise KeyError(
                 f"No global variable named {key}; "
                 f"available: {sorted(v.key for v in variables)}")
+        if self._is_reference_variable(variable):
+            return self._resolve_from_values(
+                variable, self.configurationApi.getGlobalVariableValues())
         return variable.value
 
     def setGlobalVariable(self, name: str, value: Any) -> Variable:
@@ -399,6 +423,32 @@ class ApiBaseTask(BaseTask):
                 self._new_variable(key, value))
         variable.value = self._coerce_value(value)
         return self.configurationApi.updateGlobalVariable(variable.id, variable)
+
+    @staticmethod
+    def _is_reference_variable(variable: Variable) -> bool:
+        """
+        Return ``True`` if ``variable`` is a reference variable.
+
+        A reference variable (``xlrelease.ReferenceVariable``) does not store a
+        literal value; the server resolves it from a value provider, so its
+        ``value`` comes back empty and the resolved value must be read from the
+        scope's variable-value map instead. Detected by type, with the presence
+        of a ``valueProvider`` as a fallback signal.
+        """
+        vtype = getattr(variable, "type", None) or ""
+        return (vtype.endswith("ReferenceVariable")
+                or getattr(variable, "valueProvider", None) is not None)
+
+    @staticmethod
+    def _resolve_from_values(variable: Variable, values: Dict[str, Any]) -> Any:
+        """
+        Return ``variable``'s server-resolved value from a ``${key}: value`` map.
+
+        The variable-value endpoints key entries by the interpolation token
+        ``${key}``. Falls back to the variable's stored ``value`` when the token
+        is absent from the map.
+        """
+        return values.get(f"${{{variable.key}}}", variable.value)
 
     @staticmethod
     def _global_key(name: str) -> str:
