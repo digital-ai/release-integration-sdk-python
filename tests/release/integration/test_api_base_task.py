@@ -309,6 +309,68 @@ class TestApiBaseTaskContextHelpers(unittest.TestCase):
 
         self.assertEqual(task.getReleaseVariable("refVar"), "stored")
 
+    # -- setter value-type guard --------------------------------------------
+
+    def test_set_release_variable_rejects_type_mismatch(self):
+        """Assigning a str to an existing SetStringVariable raises TypeError."""
+        task, apis = self._stub_task()
+        apis["releaseApi"].getVariables.return_value = [
+            SimpleNamespace(id="Variable1", key="relSetVar", value=["a"],
+                            type="xlrelease.SetStringVariable")]
+
+        with self.assertRaises(TypeError):
+            task.setReleaseVariable("relSetVar", "not-a-set")
+        # The mismatched payload is never forwarded to the server.
+        apis["releaseApi"].updateVariable.assert_not_called()
+
+    def test_set_release_variable_rejects_int_for_string_variable(self):
+        """Assigning an int to an existing StringVariable raises TypeError."""
+        task, apis = self._stub_task()
+        apis["releaseApi"].getVariables.return_value = [
+            SimpleNamespace(id="Variable1", key="relVar", value="hello",
+                            type="xlrelease.StringVariable")]
+
+        with self.assertRaises(TypeError):
+            task.setReleaseVariable("relVar", 42)
+        apis["releaseApi"].updateVariable.assert_not_called()
+
+    def test_set_release_variable_accepts_matching_type(self):
+        """A set value for a SetStringVariable updates and coerces to a list."""
+        task, apis = self._stub_task()
+        variable = SimpleNamespace(id="Variable1", key="relSetVar", value=["a"],
+                                   type="xlrelease.SetStringVariable")
+        apis["releaseApi"].getVariables.return_value = [variable]
+        apis["releaseApi"].updateVariable.return_value = variable
+
+        task.setReleaseVariable("relSetVar", {"x", "y"})
+
+        self.assertEqual(set(variable.value), {"x", "y"})
+        self.assertIsInstance(variable.value, list)
+        apis["releaseApi"].updateVariable.assert_called_once_with("Variable1", variable)
+
+    def test_set_release_variable_does_not_guard_reference_variable(self):
+        """Reference variables are left for the server to validate."""
+        task, apis = self._stub_task()
+        variable = SimpleNamespace(id="Variable1", key="refVar", value="",
+                                   type="xlrelease.ReferenceVariable")
+        apis["releaseApi"].getVariables.return_value = [variable]
+        apis["releaseApi"].updateVariable.return_value = variable
+
+        # No TypeError despite a str value against a non-string-looking type.
+        task.setReleaseVariable("refVar", "anything")
+        apis["releaseApi"].updateVariable.assert_called_once()
+
+    def test_set_release_variable_does_not_guard_creation(self):
+        """A brand-new variable infers its type from the value, no guard."""
+        task, apis = self._stub_task()
+        apis["releaseApi"].getVariables.return_value = []
+        apis["releaseApi"].createVariable.return_value = SimpleNamespace(
+            type="xlrelease.IntegerVariable")
+
+        task.setReleaseVariable("relNewVar", 7)
+        apis["releaseApi"].createVariable.assert_called_once()
+        apis["releaseApi"].updateVariable.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
