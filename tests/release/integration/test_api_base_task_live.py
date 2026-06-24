@@ -23,6 +23,7 @@ The suite is fully self-contained:
 import socket
 import unittest
 import uuid
+from datetime import datetime, timezone
 
 from digitalai.release.release_api_client import ReleaseAPIClient
 from digitalai.release.integration.api_base_task import ApiBaseTask
@@ -208,6 +209,17 @@ class TestApiBaseTaskLive(unittest.TestCase):
                 type="xlrelease.MapStringStringVariable",
                 key="relMapVar",
                 value={"env": "dev", "region": "us"},
+                requiresValue=False,
+                showOnReleaseStart=False,
+            ),
+        )
+        # A date release variable; its value round-trips as an ISO-8601 string.
+        template_api.createVariable(
+            root_template.id,
+            Variable(
+                type="xlrelease.DateVariable",
+                key="relDateVar",
+                value="2026-01-02T03:04:05+00:00",
                 requiresValue=False,
                 showOnReleaseStart=False,
             ),
@@ -425,6 +437,45 @@ class TestApiBaseTaskLive(unittest.TestCase):
         self.assertEqual(updated.value, new_value)
         self.assertEqual(self.task.getReleaseVariable("relMapVar"), new_value)
         print(f"setReleaseVariable('relMapVar') -> {new_value}")
+
+    # -- release variables: date --------------------------------------------
+
+    def test_08c1_get_release_date_variable(self):
+        """getReleaseVariable returns a date variable's value as an ISO-8601 string."""
+        value = self.task.getReleaseVariable("relDateVar")
+        # The server stores the seeded instant; compare instants, not the
+        # literal string (the server formats in its own timezone).
+        stored = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        self.assertEqual(stored, datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc))
+        print(f"getReleaseVariable('relDateVar') -> {value}")
+
+    def test_08c2_set_release_date_variable(self):
+        """setReleaseVariable persists a datetime, readable back via the getter."""
+        # The server stores dates to second precision, so drop microseconds.
+        new_value = datetime(2027, 7, 8, 9, 10, 11, tzinfo=timezone.utc)
+        updated = self.task.setReleaseVariable("relDateVar", new_value)
+        # The SDK coerces the datetime to its ISO-8601 string before sending; the
+        # server echoes it back normalised to its own timezone (e.g. trailing
+        # 'Z'), so compare the instant rather than the literal string.
+        self.assertEqual(
+            datetime.fromisoformat(str(updated.value).replace("Z", "+00:00")),
+            new_value,
+        )
+        read_back = datetime.fromisoformat(
+            str(self.task.getReleaseVariable("relDateVar")).replace("Z", "+00:00")
+        )
+        self.assertEqual(read_back, new_value)
+        print(f"setReleaseVariable('relDateVar') -> {new_value.isoformat()}")
+
+    def test_08c3_set_release_date_variable_current_time(self):
+        """setReleaseVariable accepts the current date/time and round-trips it."""
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        self.task.setReleaseVariable("relDateVar", now)
+        read_back = datetime.fromisoformat(
+            str(self.task.getReleaseVariable("relDateVar")).replace("Z", "+00:00")
+        )
+        self.assertEqual(read_back, now)
+        print(f"setReleaseVariable('relDateVar') current time -> {now.isoformat()}")
 
     # -- release variables: reference ---------------------------------------
 

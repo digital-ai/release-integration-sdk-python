@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Any, Dict, Type, TypeVar
 
 from digitalai.release.integration.base_task import BaseTask
@@ -297,9 +298,14 @@ class ApiBaseTask(BaseTask):
         ``releaseApi.createVariable``. The new variable's type is inferred from
         ``value`` (see :meth:`_variable_type_for_value`).
 
+        For a date variable, pass a timezone-aware ``datetime`` so the stored
+        ISO-8601 value carries an explicit offset (see :meth:`_coerce_value`).
+
         :param name: the variable name (e.g. ``"JenkinsBuildNumber"``).
         :param value: the new value to assign.
         :return: the updated (or newly created) variable.
+        :raises TypeError: if ``value`` is incompatible with the type of an
+            existing variable (see :meth:`_check_value_type`).
         """
         release_id = self.get_release_id()
         variables = self.releaseApi.getVariables(release_id)
@@ -307,6 +313,7 @@ class ApiBaseTask(BaseTask):
         if variable is None:
             return self.releaseApi.createVariable(
                 release_id, self._new_variable(name, value))
+        self._check_value_type(variable, value)
         variable.value = self._coerce_value(value)
         return self.releaseApi.updateVariable(variable.id, variable)
 
@@ -361,6 +368,8 @@ class ApiBaseTask(BaseTask):
         :param value: the new value to assign.
         :return: the updated (or newly created) variable.
         :raises ValueError: if ``name`` does not start with ``folder.``.
+        :raises TypeError: if ``value`` is incompatible with the type of an
+            existing variable (see :meth:`_check_value_type`).
         """
         folder_id = self.get_folder_id()
         key = self._folder_key(name)
@@ -369,6 +378,7 @@ class ApiBaseTask(BaseTask):
         if variable is None:
             return self.folderApi.createVariable(
                 folder_id, self._new_variable(key, value))
+        self._check_value_type(variable, value)
         variable.value = self._coerce_value(value)
         return self.folderApi.updateVariable(folder_id, variable.id, variable)
 
@@ -414,6 +424,8 @@ class ApiBaseTask(BaseTask):
         :param value: the new value to assign.
         :return: the updated (or newly created) variable.
         :raises ValueError: if ``name`` does not start with ``global.``.
+        :raises TypeError: if ``value`` is incompatible with the type of an
+            existing variable (see :meth:`_check_value_type`).
         """
         key = self._global_key(name)
         variables = self.configurationApi.getGlobalVariables()
@@ -421,6 +433,7 @@ class ApiBaseTask(BaseTask):
         if variable is None:
             return self.configurationApi.addGlobalVariable(
                 self._new_variable(key, value))
+        self._check_value_type(variable, value)
         variable.value = self._coerce_value(value)
         return self.configurationApi.updateGlobalVariable(variable.id, variable)
 
@@ -484,10 +497,20 @@ class ApiBaseTask(BaseTask):
         Return ``value`` in a JSON-serializable form for a variable payload.
 
         Sets and tuples (natural Python types for a set-of-string variable) are
-        converted to lists; everything else is passed through unchanged.
+        converted to lists; ``date``/``datetime`` values (for a date variable)
+        are formatted as an ISO-8601 string, which the server parses back into a
+        date; everything else is passed through unchanged.
+
+        Prefer a timezone-aware ``datetime``: its ISO-8601 form carries an
+        explicit offset (e.g. ``2026-04-07T08:22:28+00:00``), matching the
+        format the REST API uses. A naive ``datetime`` has no offset, so the
+        server interprets it in its own timezone, which can shift the instant.
         """
         if isinstance(value, (set, tuple)):
             return list(value)
+        # datetime is a subclass of date; isoformat() covers both.
+        if isinstance(value, date):
+            return value.isoformat()
         return value
 
     @staticmethod
@@ -501,6 +524,7 @@ class ApiBaseTask(BaseTask):
         ====================  ======================================
         ``bool``              ``xlrelease.BooleanVariable``
         ``int``               ``xlrelease.IntegerVariable``
+        ``date``/``datetime`` ``xlrelease.DateVariable``
         ``dict``              ``xlrelease.MapStringStringVariable``
         ``list``/``set``/     ``xlrelease.SetStringVariable``
         ``tuple``
@@ -514,11 +538,66 @@ class ApiBaseTask(BaseTask):
             return "xlrelease.BooleanVariable"
         if isinstance(value, int):
             return "xlrelease.IntegerVariable"
+        # datetime is a subclass of date, so this covers both.
+        if isinstance(value, date):
+            return "xlrelease.DateVariable"
         if isinstance(value, dict):
             return "xlrelease.MapStringStringVariable"
         if isinstance(value, (list, set, tuple)):
             return "xlrelease.SetStringVariable"
         return "xlrelease.StringVariable"
+
+    @staticmethod
+    def _value_matches_type(vtype: str, value: Any) -> bool:
+        """
+        Return ``True`` if ``value`` is a valid Python value for an existing
+        Release variable of type ``vtype``.
+
+        The accepted Python types mirror :meth:`_variable_type_for_value`.
+        ``vtype`` is matched by suffix so subtypes are treated as their base
+        kind (e.g. ``PasswordStringVariable`` is a string). More specific
+        suffixes are tested first because ``SetStringVariable`` and
+        ``MapStringStringVariable`` also end in ``StringVariable``. A type the
+        SDK does not recognise returns ``True`` -- it is left for the server to
+        validate rather than blocked here.
+        """
+        if vtype.endswith("BooleanVariable"):
+            return isinstance(value, bool)
+        if vtype.endswith("IntegerVariable"):
+            # bool is a subclass of int; an IntegerVariable must not accept it.
+            return isinstance(value, int) and not isinstance(value, bool)
+        if vtype.endswith("DateVariable"):
+            # A date/datetime, or an ISO-8601 string the server parses to a date.
+            return isinstance(value, (date, str))
+        if vtype.endswith("MapStringStringVariable"):
+            return isinstance(value, dict)
+        if vtype.endswith("SetStringVariable"):
+            return isinstance(value, (list, set, tuple))
+        if vtype.endswith("StringVariable"):
+            return isinstance(value, str)
+        return True
+
+    @classmethod
+    def _check_value_type(cls, variable: Variable, value: Any) -> None:
+        """
+        Raise :class:`TypeError` when ``value`` is incompatible with the type
+        of an existing ``variable`` being updated.
+
+        The variable setters preserve an existing variable's ``type`` and only
+        replace its value (the type is inferred from the value only when a new
+        variable is created). Without this guard a value of the wrong Python
+        type -- e.g. a ``str`` assigned to a ``SetStringVariable`` -- would be
+        forwarded to the server as a mismatched payload. Reference variables
+        and types the SDK does not recognise (see :meth:`_value_matches_type`)
+        are not checked.
+        """
+        if cls._is_reference_variable(variable):
+            return
+        vtype = getattr(variable, "type", None) or ""
+        if not cls._value_matches_type(vtype, value):
+            raise TypeError(
+                f"Cannot assign {type(value).__name__} value {value!r} to "
+                f"variable {variable.key!r} of type {vtype!r}.")
 
     @classmethod
     def _new_variable(cls, key: str, value: Any) -> Variable:

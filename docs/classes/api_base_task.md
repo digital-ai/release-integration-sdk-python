@@ -187,7 +187,15 @@ variables** never return their secret — the server masks the value as `*******
 Sets the value of a variable in the current release by name. The Python3
 equivalent of the Jython script assignment `releaseVariables[name] = value`. If
 the variable exists its value is updated; otherwise a new variable is created,
-with its type inferred from `value`.
+with its type inferred from `value` (a `date`/`datetime` infers a
+`DateVariable`). When updating an existing variable, `value` must be compatible
+with the variable's type or a `TypeError` is raised before any server call.
+
+For a date variable, pass a timezone-aware `datetime` (e.g.
+`datetime(2026, 4, 7, 8, 22, 28, tzinfo=timezone.utc)`) so the stored ISO-8601
+value carries an explicit offset, matching the format the REST API uses
+(`2026-04-07T08:22:28+00:00`). A naive `datetime` has no offset, so the server
+interprets it in its own timezone.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -195,6 +203,8 @@ with its type inferred from `value`.
 | `value` | `Any` | _required_ | the new value to assign. |
 
 **Returns:** `Variable` — the updated (or newly created) variable.
+
+**Raises:** `TypeError` — if `value` is incompatible with the type of an existing variable.
 
 [↑ Method index](#method-index)
 
@@ -224,7 +234,10 @@ Sets the value of a variable owned by the current folder by name. Only variables
 the folder owns are matched: an inherited variable (defined on a parent folder
 or as a global variable) is not. If the folder owns the variable its value is
 updated; otherwise a new folder-owned variable is created (which shadows any
-inherited value of the same name). The `folder.` prefix is required.
+inherited value of the same name). The new variable's type is inferred from
+`value` (a `date`/`datetime` infers a `DateVariable`); when updating an existing
+variable, `value` must be compatible with the variable's type. The `folder.`
+prefix is required.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -233,7 +246,7 @@ inherited value of the same name). The `folder.` prefix is required.
 
 **Returns:** `Variable` — the updated (or newly created) variable.
 
-**Raises:** `ValueError` — if `name` does not start with `folder.`.
+**Raises:** `ValueError` — if `name` does not start with `folder.`; `TypeError` — if `value` is incompatible with the type of an existing variable.
 
 [↑ Method index](#method-index)
 
@@ -259,8 +272,10 @@ come back masked as `********`.
 
 Sets the value of a global variable by name. The `global.` prefix is required.
 If the variable exists its value is updated; otherwise a new global variable is
-created, with its type inferred from `value`. The task's run-as user must hold
-the permission to edit global variables.
+created, with its type inferred from `value` (a `date`/`datetime` infers a
+`DateVariable`). When updating an existing variable, `value` must be compatible
+with the variable's type. The task's run-as user must hold the permission to
+edit global variables.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -269,7 +284,7 @@ the permission to edit global variables.
 
 **Returns:** `Variable` — the updated (or newly created) variable.
 
-**Raises:** `ValueError` — if `name` does not start with `global.`.
+**Raises:** `ValueError` — if `name` does not start with `global.`; `TypeError` — if `value` is incompatible with the type of an existing variable.
 
 [↑ Method index](#method-index)
 
