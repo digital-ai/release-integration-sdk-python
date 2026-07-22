@@ -118,7 +118,7 @@ class TestBaseTaskOutput(unittest.TestCase):
         task = self._task()
         self.assertIsNone(task.get_task_user())
 
-    def test_validate_api_credentials_raises_without_user(self):
+    def test_get_release_api_client_raises_without_task_user(self):
         task = self._task()
         task.release_server_url = "http://localhost:5516"
         with self.assertRaises(ValueError):
@@ -158,10 +158,13 @@ class TestAutomatedTaskAsUser(unittest.TestCase):
         with self.assertRaises(ValueError):
             task.get_release_api_client()
 
-    def test_get_release_api_client_raises_when_username_missing(self):
+    def test_get_release_api_client_uses_password_as_token_when_username_missing(self):
         task = self._task(None, "secret")
-        with self.assertRaises(ValueError):
-            task.get_release_api_client()
+        with mock.patch("digitalai.release.integration.base_task.ReleaseAPIClient") as fake_client:
+            client = task.get_release_api_client()
+        fake_client.assert_called_once_with(
+            self.SERVER_URL, personal_access_token="secret", timeout=None)
+        self.assertIs(client, fake_client.return_value)
 
     def test_get_release_api_client_raises_when_credentials_blank(self):
         task = self._task("", "")
