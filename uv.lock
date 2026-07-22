@@ -149,20 +149,20 @@ wheels = [
 
 [[package]]
 name = "digitalai-release-api-client"
-version = "26.3.0b5"
+version = "26.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b1/09/b64a2257ddc36d7c4dae1533f92eb63e95e86b32e7362fd21a2c153aede4/digitalai_release_api_client-26.3.0b5.tar.gz", hash = "sha256:7f8c8058e6694a2210b29f394c93250738236c84b20ab7d77edb56b1e65604f9", size = 39161 }
+sdist = { url = "https://files.pythonhosted.org/packages/3f/b1/81bcf5fc1d6cb5c74aff2294b1f2ca0243c2c5b7290c95a13a1a7d599b01/digitalai_release_api_client-26.3.1.tar.gz", hash = "sha256:3ed7500fa45634f1cb29eb007f4567709ca786c263afba55c7fd6dcdf591073c", size = 42589 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5b/d5/9f2d1cc01207108125b9f10d2af1c5c476385fa2998ac433e79e5990c3f8/digitalai_release_api_client-26.3.0b5-py3-none-any.whl", hash = "sha256:76ac7caa97adc15bc9cd54b03222bde10d4f36d6e4dedb3280c4ba05719c6cc7", size = 67601 },
+    { url = "https://files.pythonhosted.org/packages/78/fd/c7a14e9da74642e0414371c38883805557d444511411d3b74a127ce5cac1/digitalai_release_api_client-26.3.1-py3-none-any.whl", hash = "sha256:ceb41222fd90cdc05bd3fec5731ed0fe476bb9402084a2d488f306a44c7e7702", size = 73844 },
 ]
 
 [[package]]
 name = "digitalai-release-sdk"
-version = "26.3.0b5"
+version = "26.3.1"
 source = { editable = "." }
 dependencies = [
     { name = "dataclasses-json" },
@@ -181,7 +181,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "dataclasses-json", specifier = ">=0.6.7,<1.0.0" },
-    { name = "digitalai-release-api-client", specifier = "==26.3.0b5" },
+    { name = "digitalai-release-api-client", specifier = "==26.3.1" },
     { name = "kubernetes", specifier = ">=35.0.0,<36.0.0" },
     { name = "pycryptodomex", specifier = ">=3.23.0,<4.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
