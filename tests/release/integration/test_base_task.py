@@ -9,6 +9,7 @@ from digitalai.release.integration.input_context import (
     AutomatedTaskAsUserContext,
     ReleaseContext,
 )
+from digitalai.release.integration.output_context import OutputContext
 
 # Realistic ids, matching the sample input context.
 FOLDER_ID = 'Applications/Folder1f65c7220b394afbb941154342fd9fc6'
@@ -96,6 +97,45 @@ class TestBaseTaskOutput(unittest.TestCase):
         ctx = task.get_output_context()
         self.assertEqual(ctx.exit_code, 1)
         self.assertEqual(ctx.job_error_message, "Abort requested")
+
+    def test_abort_raises_abort_exception_and_marks_output_context(self):
+        task = self._task()
+        task.output_context = OutputContext(0, "", {}, [])
+
+        with self.assertRaises(AbortException):
+            task.abort()
+
+        ctx = task.get_output_context()
+        self.assertEqual(ctx.exit_code, 1)
+        self.assertEqual(ctx.job_error_message, "Abort requested")
+
+    def test_output_context_is_never_none_immediately_after_construction(self):
+        # Guards against the window between task construction and the worker
+        # thread starting execute_task(), during which the main thread's
+        # SIGABRT/SIGTERM handler may already call abort().
+        task = self._task()
+        self.assertIsNotNone(task.get_output_context())
+
+    def test_abort_immediately_after_construction_does_not_crash(self):
+        # Simulates an abort signal arriving before execute_task()/execute()
+        # has ever run on the worker thread.
+        task = self._task()
+
+        with self.assertRaises(AbortException):
+            task.abort()
+
+        ctx = task.get_output_context()
+        self.assertEqual(ctx.exit_code, 1)
+        self.assertEqual(ctx.job_error_message, "Abort requested")
+
+    def test_is_abort_requested_defaults_to_false(self):
+        task = self._task()
+        self.assertFalse(task.is_abort_requested())
+
+    def test_is_abort_requested_true_after_request_abort(self):
+        task = self._task()
+        task._request_abort()
+        self.assertTrue(task.is_abort_requested())
 
     def test_set_output_property_rejects_empty_name(self):
         task = self._task()

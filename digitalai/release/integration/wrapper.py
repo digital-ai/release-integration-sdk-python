@@ -7,6 +7,7 @@ import json
 import os
 import signal
 import sys
+import threading
 import time
 from typing import Any, Dict, Optional, Tuple
 
@@ -14,6 +15,7 @@ import requests
 
 from digitalai.release.integration import k8s, watcher
 from .base_task import BaseTask
+from .exceptions import AbortException
 from .input_context import InputContext
 from .job_data_encryptor import AESJobDataEncryptor, NoOpJobDataEncryptor
 from .logger import dai_logger
@@ -45,6 +47,10 @@ size_of_1Mb = 1024 * 1024
 HTTP_CONNECT_TIMEOUT = float(os.getenv('HTTP_CONNECT_TIMEOUT', '10'))
 HTTP_READ_TIMEOUT = float(os.getenv('HTTP_READ_TIMEOUT', '60'))
 
+# How often the main thread polls the worker thread (running the task's
+# execute_task()) via join(), so it stays responsive to SIGABRT/SIGTERM.
+WORKER_POLL_INTERVAL_SECONDS = 0.5
+
 # A single Session reused across all callback requests so the underlying urllib3
 # connection pool is shared (instead of opening a fresh connection per call).
 _http_session: requests.Session = requests.Session()
@@ -63,24 +69,88 @@ def get_encryptor():
 # Initialize the global task object
 dai_task_object: Optional[BaseTask] = None
 
+# Single-writer guard so the output context is flushed exactly once, whether
+# the task finishes normally (worker thread's completion path) or is aborted
+# (main thread's signal handler). Reset at the start of each execute_task()
+# call so daemon-mode iterations each get a fresh guard.
+_report_lock = threading.Lock()
+_result_reported = False
+
+
+def _reset_report_guard() -> None:
+    """Clears the single-writer flush guard ahead of a new task execution."""
+    global _result_reported
+    with _report_lock:
+        _result_reported = False
+
+
+def _report_once() -> bool:
+    """
+    Flushes the current dai_task_object's output context exactly once. The
+    first caller (either the worker thread's normal completion path or the
+    main thread's abort handler) wins; subsequent calls are no-ops.
+
+    Returns True if this call performed the flush, False if it was already
+    reported by another caller.
+    """
+    global _result_reported
+    with _report_lock:
+        if _result_reported:
+            return False
+        _result_reported = True
+
+    if dai_task_object is not None and dai_task_object.get_output_context() is not None:
+        update_output_context(dai_task_object.get_output_context())
+    else:
+        dai_logger.error("No output context available to report task result")
+        update_output_context(OutputContext(1, "Task produced no output context", {}, []))
+    return True
+
 
 def abort_handler(signum, frame):
     """
-    This function handles the abort request by calling the abort method on the global task object, if it exists.
-    If the task object does not exist, it logs a message and exits with a status code of 1.
+    Handles SIGTERM/SIGABRT by requesting a cooperative abort and running the
+    task's abort() cleanup hook (if a task object exists), then flushing the
+    (aborted) output context exactly once via _report_once(), and finally
+    terminating the process immediately with os._exit(1).
+
+    os._exit() (rather than sys.exit()) is used deliberately: it bypasses all
+    Python finally/atexit machinery, which matters in daemon mode where run()'s
+    finally block would otherwise restart a blocking input-context watcher and
+    prevent the process from actually exiting.
+
+    The worker thread that may still be running the task's execute() is a
+    daemon thread and is not waited on; process exit here is sufficient to
+    end it.
     """
-    dai_logger.info("Received SIGTERM to gracefully stop the process")
+    signal_name = signal.Signals(signum).name
+    dai_logger.info(f"Received {signal_name} to gracefully stop the process")
     global dai_task_object
 
     if dai_task_object:
-        dai_task_object.abort()
+        dai_task_object._request_abort()
+        try:
+            dai_task_object.abort()
+        except AbortException:
+            # Expected: the default abort() raises this after marking the
+            # output context as aborted.
+            pass
+        except SystemExit:
+            # A task's overridden abort() might still call sys.exit()/exit();
+            # ignore it so we can still flush and exit deliberately below.
+            pass
+        except Exception:
+            dai_logger.error("Unexpected error occurred in abort()", exc_info=True)
     else:
         dai_logger.info("Abort requested")
-        sys.exit(1)
+
+    _report_once()
+    os._exit(1)
 
 
 # Register abort handler
 signal.signal(signal.SIGTERM, abort_handler)
+signal.signal(signal.SIGABRT, abort_handler)
 
 
 def _post_callback(url: str, encrypted_json) -> requests.Response:
@@ -224,26 +294,35 @@ def should_retry_callback_request(encrypted_data) -> bool:
 
 def execute_task(task_object: BaseTask):
     """
-    Execute the given task object by setting it as the global task object and starting its execution.
-    If an exception is raised during execution, log the error. Finally, update the output context file
-    using the output context of the task object.
+    Execute the given task object on a dedicated daemon worker thread, while the
+    main thread waits responsively (polling worker.join with a short timeout)
+    so it stays free to handle SIGABRT/SIGTERM even if the task is blocked in
+    an uninterruptible call.
+
+    The worker thread is a daemon thread: if the process exits (e.g. via the
+    signal handler's os._exit(1) during an abort), it is not waited on.
+
+    After the worker finishes on its own (the non-aborted path), the output
+    context is flushed exactly once via _report_once() -- a no-op if the
+    abort handler already reported it first.
     """
     global dai_task_object
-    try:
-        dai_task_object = task_object
-        dai_logger.info("Starting task execution")
-        dai_task_object.execute_task()
-    except Exception:
-        dai_logger.error("Unexpected error occurred.", exc_info=True)
-    finally:
-        # Guard against a task object that was never constructed or that failed
-        # before producing an output context, so the finally block does not raise
-        # a second exception that masks the original one.
-        if dai_task_object is not None and dai_task_object.get_output_context() is not None:
-            update_output_context(dai_task_object.get_output_context())
-        else:
-            dai_logger.error("No output context available to report task result")
-            update_output_context(OutputContext(1, "Task produced no output context", {}, []))
+    _reset_report_guard()
+    dai_task_object = task_object
+    dai_logger.info("Starting task execution")
+
+    def _run_task():
+        try:
+            task_object.execute_task()
+        except Exception:
+            dai_logger.error("Unexpected error occurred.", exc_info=True)
+
+    worker = threading.Thread(target=_run_task, name="dai-task-worker", daemon=True)
+    worker.start()
+    while worker.is_alive():
+        worker.join(timeout=WORKER_POLL_INTERVAL_SECONDS)
+
+    _report_once()
 
 
 def find_class_file(root_dir, class_name):

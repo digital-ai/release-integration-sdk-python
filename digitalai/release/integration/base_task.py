@@ -1,4 +1,5 @@
 import sys
+import threading
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
@@ -20,7 +21,8 @@ class BaseTask(ABC):
         self.release_context = None
         self.release_server_url = None
         self.input_properties = None
-        self.output_context = None
+        self.output_context = OutputContext(0, "", {}, [])
+        self._abort_event = threading.Event()
 
     def execute_task(self) -> None:
         """
@@ -29,7 +31,6 @@ class BaseTask(ABC):
         is raised, the task's exit code is also set to 1.
         """
         try:
-            self.output_context = OutputContext(0, "", {}, [])
             self.execute()
         except AbortException:
             dai_logger.info("Abort requested")
@@ -51,10 +52,31 @@ class BaseTask(ABC):
 
     def abort(self) -> None:
         """
-        Sets the task's exit code to 1 and exits the program with a status code of 1.
+        Marks the task as aborted (exit code 1, "Abort requested") and raises
+        AbortException. When called from within execute(), this is caught by
+        execute_task()'s existing AbortException handling, stopping the task
+        immediately. When called from the SDK's signal handler (outside of
+        execute_task()), the caller is responsible for catching this exception
+        and performing its own cleanup/exit.
         """
         self.set_exit_code(1)
-        sys.exit(1)
+        self.set_error_message("Abort requested")
+        raise AbortException()
+
+    def is_abort_requested(self) -> bool:
+        """
+        Returns True once the SDK has signaled that an abort was requested
+        (e.g. the process received SIGABRT/SIGTERM). Tasks may poll this from
+        within execute() to cooperatively stop long-running work promptly.
+        """
+        return self._abort_event.is_set()
+
+    def _request_abort(self) -> None:
+        """
+        Internal SDK hook: signals is_abort_requested() to start returning True.
+        Not intended to be called by task authors.
+        """
+        self._abort_event.set()
 
     def get_output_context(self) -> OutputContext:
         """
