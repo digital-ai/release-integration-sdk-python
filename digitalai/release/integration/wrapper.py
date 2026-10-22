@@ -73,7 +73,7 @@ dai_task_object: Optional[BaseTask] = None
 # the task finishes normally (worker thread's completion path) or is aborted
 # (main thread's signal handler). Reset at the start of each execute_task()
 # call so daemon-mode iterations each get a fresh guard.
-_report_lock = threading.Lock()
+_report_lock = threading.RLock()
 _result_reported = False
 
 
