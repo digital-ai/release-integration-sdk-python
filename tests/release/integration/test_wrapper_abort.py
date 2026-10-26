@@ -206,6 +206,59 @@ class WrapperExecuteTaskThreadingTests(unittest.TestCase):
         self.assertEqual(mock_update.call_count, 2)
         self.assertIs(wrapper.dai_task_object, task2)
 
+    def test_abort_exception_propagates_exit_status_after_reporting(self):
+        from digitalai.release.integration.exceptions import AbortException
+
+        class _AbortingTask(BaseTask):
+            def execute(self) -> None:
+                raise AbortException()
+
+        task = _AbortingTask()
+
+        with mock.patch.object(wrapper, "update_output_context") as mock_update:
+            with self.assertRaises(SystemExit) as ctx:
+                wrapper.execute_task(task)
+
+        # BaseTask.execute_task() sets exit_code=1/"Abort requested" then
+        # sys.exit(1); the status must be propagated on the main thread.
+        self.assertEqual(ctx.exception.code, 1)
+        mock_update.assert_called_once()
+        (reported_ctx,), _ = mock_update.call_args
+        self.assertEqual(reported_ctx.exit_code, 1)
+        self.assertEqual(reported_ctx.job_error_message, "Abort requested")
+
+    def test_direct_sys_exit_propagates_status_and_reports_context_as_is(self):
+        class _ExitingTask(BaseTask):
+            def execute(self) -> None:
+                sys.exit(2)
+
+        task = _ExitingTask()
+
+        with mock.patch.object(wrapper, "update_output_context") as mock_update:
+            with self.assertRaises(SystemExit) as ctx:
+                wrapper.execute_task(task)
+
+        # The exact SystemExit code must be preserved.
+        self.assertEqual(ctx.exception.code, 2)
+        # Strict master parity: the output context is reported as-is (default
+        # success), not reconciled to the SystemExit code.
+        mock_update.assert_called_once()
+        (reported_ctx,), _ = mock_update.call_args
+        self.assertEqual(reported_ctx.exit_code, 0)
+
+    def test_normal_completion_does_not_raise_system_exit(self):
+        class _FastTask(BaseTask):
+            def execute(self) -> None:
+                self.set_output_property("ok", True)
+
+        task = _FastTask()
+
+        with mock.patch.object(wrapper, "update_output_context") as mock_update:
+            # Must return normally, not raise SystemExit.
+            wrapper.execute_task(task)
+
+        mock_update.assert_called_once()
+
 
 class WrapperRealSigabrtEndToEndTest(unittest.TestCase):
     """

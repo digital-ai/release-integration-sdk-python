@@ -305,15 +305,30 @@ def execute_task(task_object: BaseTask):
     After the worker finishes on its own (the non-aborted path), the output
     context is flushed exactly once via _report_once() -- a no-op if the
     abort handler already reported it first.
+
+    If the worker raised SystemExit (e.g. BaseTask.execute_task()'s sys.exit(1)
+    after an AbortException, or a user task calling sys.exit() directly), it is
+    captured on the worker thread and re-raised here on the main thread after
+    reporting, so the process exits with the intended status.
     """
     global dai_task_object
     _reset_report_guard()
     dai_task_object = task_object
     dai_logger.info("Starting task execution")
 
+    worker_outcome: Dict[str, SystemExit] = {}
+
     def _run_task():
         try:
             task_object.execute_task()
+        except SystemExit as e:
+            # SystemExit (a BaseException, not Exception) only terminates this
+            # worker thread and is otherwise swallowed by the interpreter.
+            # Capture it so the main thread can propagate the intended process
+            # exit status after the result is reported. This covers both
+            # BaseTask.execute_task()'s sys.exit(1) after an AbortException and
+            # a user task calling sys.exit() directly.
+            worker_outcome["exit"] = e
         except Exception:
             dai_logger.error("Unexpected error occurred.", exc_info=True)
 
@@ -323,6 +338,18 @@ def execute_task(task_object: BaseTask):
         worker.join(timeout=WORKER_POLL_INTERVAL_SECONDS)
 
     _report_once()
+
+    # Re-raise the worker's SystemExit on the main thread (after reporting) so
+    # the process exits with the status the task intended, matching the
+    # pre-worker-thread (main-branch) behavior. The abort-handler path
+    # (os._exit) is separate and unaffected.
+    #
+    # TODO: Should the worker's SystemExit code also be reflected in the
+    # reported OutputContext.exit_code? Currently (matching master) the context
+    # is reported as-is, so a task calling sys.exit(2) without set_exit_code()
+    # reports a success context (exit_code 0) while the process exits 2.
+    if "exit" in worker_outcome:
+        raise worker_outcome["exit"]
 
 
 def find_class_file(root_dir, class_name):
