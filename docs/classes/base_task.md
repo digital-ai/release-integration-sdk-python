@@ -9,7 +9,7 @@
 | **Class** | `BaseTask` |
 | **Module** | `digitalai.release.integration.base_task` |
 | **Source** | [`digitalai/release/integration/base_task.py`](../../digitalai/release/integration/base_task.py) |
-| **Methods** | 18 |
+| **Methods** | 20 |
 
 Subclass `BaseTask` to build a container-based integration task. Implement the
 abstract [`execute`](#execute) method with your task logic; the Release runtime
@@ -46,7 +46,8 @@ class Hello(BaseTask):
 |--------|---------|-------------|
 | [`execute`](#execute) | `None` | Abstract method holding the task's main logic; implemented by subclasses. |
 | [`execute_task`](#execute_task) | `None` | Runs `execute` with error handling and exit-code management; called by the runtime. |
-| [`abort`](#abort) | `None` | Sets the exit code to 1 and exits the program. |
+| [`abort`](#abort) | `None` | Marks the task as aborted (exit code 1, "Abort requested") and raises `AbortException`. |
+| [`is_abort_requested`](#is_abort_requested) | `bool` | Returns `True` once the SDK has signaled that an abort was requested. |
 | [`get_input_properties`](#get_input_properties) | `dict[str, Any]` | Returns the task's input properties. |
 | [`set_output_property`](#set_output_property) | `None` | Sets a named output property of the task. |
 | [`get_output_properties`](#get_output_properties) | `dict[str, Any]` | Returns the output properties of the task. |
@@ -102,11 +103,43 @@ _No parameters._
 
 ### `abort`
 
-Sets the task's exit code to `1` and exits the program with a status code of `1`.
+Marks the task as aborted by setting the exit code to `1` and the error message to
+`"Abort requested"`, then raises `AbortException`. The default implementation is
+the user-overridable hook invoked by the SDK when the process receives `SIGABRT`
+or `SIGTERM` (e.g. when a Release job is aborted). Override it to perform custom
+cleanup; call `super().abort()` (or raise `AbortException` yourself) to preserve
+the exit code / error message contract, or call `self.set_exit_code(...)` /
+`self.set_error_message(...)` directly if you need different semantics.
+
+For long-running tasks, prefer polling [`is_abort_requested`](#is_abort_requested)
+from within `execute` to stop cooperatively and promptly, rather than relying
+solely on `abort` being called.
 
 _No parameters._
 
 **Returns:** _None._
+
+**Raises:** `AbortException`.
+
+[↑ Method index](#method-index)
+
+### `is_abort_requested`
+
+Returns `True` once the SDK has signaled that an abort was requested (the process
+received `SIGABRT`/`SIGTERM`). Tasks may poll this from within `execute` to
+cooperatively stop long-running work promptly instead of waiting to be
+forcibly terminated.
+
+```python
+class MyTask(BaseTask):
+    def execute(self) -> None:
+        while not self.is_abort_requested():
+            do_one_unit_of_work()
+```
+
+_No parameters._
+
+**Returns:** `bool` — `True` if an abort has been requested, `False` otherwise.
 
 [↑ Method index](#method-index)
 

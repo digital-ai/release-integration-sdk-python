@@ -104,7 +104,8 @@ class Deploy(BaseTask):
 
 Raising an exception from `execute` fails the task: `execute_task` records the
 message and sets a non-zero exit code. To stop immediately, call `abort`, which
-sets the exit code to `1` and exits the process.
+marks the task as aborted (exit code `1`, "Abort requested") and raises
+`AbortException`, unwinding out of `execute`.
 
 **Classes:** [`BaseTask`](classes/base_task.md)
 
@@ -124,6 +125,23 @@ class GuardedTask(BaseTask):
             self.abort()
 
         self.add_comment("Proceeding")
+```
+
+For long-running tasks, the SDK also handles `SIGABRT`/`SIGTERM` (e.g. when a
+Release job is aborted) by running `abort` on your task automatically — you
+don't need to install a signal handler yourself. If your `execute` performs
+work in a loop or in chunks, poll `is_abort_requested` to stop promptly instead
+of waiting for the whole task to finish:
+
+```python
+class LongRunningTask(BaseTask):
+
+    def execute(self) -> None:
+        for item in self.input_properties.get("items", []):
+            if self.is_abort_requested():
+                self.add_comment("Stopping early: abort requested")
+                return
+            process(item)
 ```
 
 [↑ Contents](#contents)
