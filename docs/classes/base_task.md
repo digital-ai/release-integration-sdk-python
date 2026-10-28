@@ -148,8 +148,10 @@ After an abort is requested, the SDK waits up to `ABORT_GRACE_PERIOD_SECONDS`
 (environment variable, default `3`) for `execute` to return, then reports the
 aborted result and exits. Output properties and reporting records the task sets
 before it returns within that time are included in the result. Keep the grace
-period below the task type's `abortTimeout` (10 seconds when unset), after which
-the runner force-kills the container.
+period below the task type's `abortTimeout`, after which the runner force-kills
+the container. `abortTimeout` is a hidden property of `xlrelease.ContainerTask`
+that defaults to 30 seconds; the runner falls back to 10 seconds if it is set
+to `0`.
 
 _No parameters._
 

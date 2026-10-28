@@ -53,8 +53,8 @@ WORKER_POLL_INTERVAL_SECONDS = 0.5
 
 # How long the abort handler waits for the task's execute() to stop after an
 # abort is requested, before it reports the aborted result and exits. Keep it
-# below the task type's abortTimeout (10s when unset), after which the runner
-# force-kills the container.
+# below the task type's abortTimeout (30s by default on xlrelease.ContainerTask;
+# the runner uses 10s if it is 0), after which the runner force-kills the container.
 ABORT_GRACE_PERIOD_SECONDS = float(os.getenv('ABORT_GRACE_PERIOD_SECONDS', '3'))
 
 # A single Session reused across all callback requests so the underlying urllib3
