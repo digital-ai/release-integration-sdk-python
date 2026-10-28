@@ -131,7 +131,9 @@ For long-running tasks, the SDK also handles `SIGABRT`/`SIGTERM` (e.g. when a
 Release job is aborted) by running `abort` on your task automatically — you
 don't need to install a signal handler yourself. If your `execute` performs
 work in a loop or in chunks, poll `is_abort_requested` to stop promptly instead
-of waiting for the whole task to finish:
+of waiting for the whole task to finish. The SDK waits up to
+`ABORT_GRACE_PERIOD_SECONDS` (default `3`) for `execute` to return, so anything
+the task records on its way out is reported with the aborted result:
 
 ```python
 class LongRunningTask(BaseTask):

@@ -76,6 +76,19 @@ class ShowVersion(ApiBaseTask):
 
 ## Changelog
 
+### Unreleased
+
+#### 🚀 Features
+
+- Tasks can be aborted: the SDK runs `execute()` on a worker thread and handles `SIGABRT`/`SIGTERM` by calling the task's `abort()` hook. Long-running tasks can poll the new `is_abort_requested()` to stop cooperatively.
+- After an abort is requested, the SDK waits up to `ABORT_GRACE_PERIOD_SECONDS` (default 3) for `execute()` to return, so the outputs and reporting records a task sets on its way out are reported.
+
+#### 🐛 Fixes
+
+- A signal received while the task result is being reported no longer cuts off the report; repeat signals during an abort are ignored.
+- An aborted result is never reported with exit code 0, and a task calling `sys.exit(n)` is reported with exit code `n`.
+- Tasks whose `__init__` does not call `super().__init__()` work again.
+
 ### Version 26.3.1
 
 #### 🚀 Features
