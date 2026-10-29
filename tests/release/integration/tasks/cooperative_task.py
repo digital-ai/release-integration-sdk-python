@@ -1,16 +1,17 @@
 import time
+from pathlib import Path
 
 from digitalai.release.integration import BaseTask
 
 
 class CooperativeTask(BaseTask):
     """
-    Fixture task used by test_wrapper_abort.py to verify that a task polling
-    is_abort_requested() can stop within the abort grace period and have the
-    outputs it sets on the way out reported.
+    Polls is_abort_requested() and records outputs on the way out, which the
+    wrapper must report. Creates the ``task_started`` file once execute() runs.
     """
 
     def execute(self) -> None:
+        Path("task_started").touch()
         processed = 0
         while not self.is_abort_requested():
             processed += 1

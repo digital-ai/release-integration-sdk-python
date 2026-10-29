@@ -1,16 +1,10 @@
-import socket
-import unittest
-from datetime import date, datetime, timezone
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from typing import Any, Dict, Tuple
+from unittest import mock
 
-from digitalai.release.integration.input_context import (
-    AutomatedTaskAsUserContext,
-    ReleaseContext,
-)
-from digitalai.release.integration.api_base_task import ApiBaseTask
-
-from digitalai.release.release_api_client import ReleaseAPIClient
+import pytest
 from com.xebialabs.xlrelease.api.v1.activity_logs_api import ActivityLogsApi
 from com.xebialabs.xlrelease.api.v1.application_api import ApplicationApi
 from com.xebialabs.xlrelease.api.v1.archive_api import ArchiveApi
@@ -22,9 +16,7 @@ from com.xebialabs.xlrelease.api.v1.delivery_pattern_api import DeliveryPatternA
 from com.xebialabs.xlrelease.api.v1.dsl_api import DslApi
 from com.xebialabs.xlrelease.api.v1.environment_api import EnvironmentApi
 from com.xebialabs.xlrelease.api.v1.environment_label_api import EnvironmentLabelApi
-from com.xebialabs.xlrelease.api.v1.environment_reservation_api import (
-    EnvironmentReservationApi,
-)
+from com.xebialabs.xlrelease.api.v1.environment_reservation_api import EnvironmentReservationApi
 from com.xebialabs.xlrelease.api.v1.environment_stage_api import EnvironmentStageApi
 from com.xebialabs.xlrelease.api.v1.folder_api import FolderApi
 from com.xebialabs.xlrelease.api.v1.folder_versioning_api import FolderVersioningApi
@@ -43,9 +35,14 @@ from com.xebialabs.xlrelease.api.v1.template_api import TemplateApi
 from com.xebialabs.xlrelease.api.v1.triggers_api import TriggersApi
 from com.xebialabs.xlrelease.api.v1.user_api import UserApi
 from com.xebialabs.xlrelease.api.v1.variable_api import VariableApi
+from com.xebialabs.xlrelease.domain.variable import ValueProvider, Variable
 
+from digitalai.release.integration import base_task
+from digitalai.release.integration.api_base_task import ApiBaseTask
+from digitalai.release.integration.input_context import AutomatedTaskAsUserContext, ReleaseContext
+from tests.support import FOLDER_ID, PHASE_ID, RELEASE_ID, SERVER_URL, TASK_ID
 
-# Mapping of every ApiBaseTask property name to the wrapper class it must return.
+# Every ApiBaseTask property and the API wrapper class it must return.
 API_PROPERTIES = {
     "activityLogsApi": ActivityLogsApi,
     "applicationApi": ApplicationApi,
@@ -80,365 +77,357 @@ API_PROPERTIES = {
 }
 
 
-# The live-call test below talks to a real Release server. Locally that is the
-# developer's instance on localhost:5516; CI has no such server, so the test is
-# skipped automatically when the port is not reachable.
-LIVE_SERVER_HOST = "localhost"
-LIVE_SERVER_PORT = 5516
-LIVE_SERVER_URL = f"http://{LIVE_SERVER_HOST}:{LIVE_SERVER_PORT}"
-
-
-def _server_reachable(host: str, port: int, timeout: float = 0.5) -> bool:
-    """Return True if a TCP connection to host:port succeeds within the timeout."""
-    try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except OSError:
-        return False
-
-
-class _SampleApiTask(ApiBaseTask):
-    """Concrete ApiBaseTask used to exercise the base behaviour in tests."""
-
-    def execute(self) -> None:  # pragma: no cover - never executed by the tests
+class SampleApiTask(ApiBaseTask):
+    def execute(self) -> None:
         pass
 
 
-class TestApiBaseTask(unittest.TestCase):
-    """Integration tests for the ApiBaseTask base class."""
-
-    def setUp(self):
-        # Configure the task context the way the Release runtime would, so that
-        # get_release_api_client() builds a client from the "Run as user" details.
-        self.task = _SampleApiTask()
-        self.task.release_server_url = LIVE_SERVER_URL
-        self.task.release_context = ReleaseContext(
-            id="Applications/Release0000000000000000000000000000",
-            automated_task_as_user=AutomatedTaskAsUserContext(
-                username="admin", password="admin"
-            ),
-        )
-
-    def test_api_client_is_lazy_and_cached(self):
-        """apiClient is built on first access and the same instance is reused."""
-        self.assertIsNone(self.task._api_client)
-        client = self.task.apiClient
-        self.assertIsInstance(client, ReleaseAPIClient)
-        self.assertIs(self.task.apiClient, client)
-
-    def test_all_api_properties_return_correct_type(self):
-        """Every API property returns an instance of its wrapper class."""
-        for name, api_class in API_PROPERTIES.items():
-            with self.subTest(api=name):
-                instance = getattr(self.task, name)
-                self.assertIsInstance(instance, api_class)
-
-    def test_api_properties_are_cached(self):
-        """Accessing a property twice returns the very same cached instance."""
-        for name in API_PROPERTIES:
-            with self.subTest(api=name):
-                first = getattr(self.task, name)
-                second = getattr(self.task, name)
-                self.assertIs(first, second)
-
-    def test_all_apis_share_single_client(self):
-        """All wrappers are built on the one shared apiClient."""
-        client = self.task.apiClient
-        for name in API_PROPERTIES:
-            with self.subTest(api=name):
-                self.assertIs(getattr(self.task, name).api, client)
-
-    def test_reset_api_clients_clears_caches(self):
-        """reset_api_clients drops the client and forces fresh instances."""
-        old_client = self.task.apiClient
-        old_release_api = self.task.releaseApi
-
-        self.task.reset_api_clients()
-        self.assertIsNone(self.task._api_client)
-        self.assertEqual(self.task._api_instances, {})
-
-        self.assertIsNot(self.task.apiClient, old_client)
-        self.assertIsNot(self.task.releaseApi, old_release_api)
-
-    @unittest.skipUnless(
-        _server_reachable(LIVE_SERVER_HOST, LIVE_SERVER_PORT),
-        f"live Release server not available on {LIVE_SERVER_HOST}:{LIVE_SERVER_PORT}",
+@pytest.fixture
+def task():
+    task = SampleApiTask()
+    task.task_id = TASK_ID
+    task.release_server_url = SERVER_URL
+    task.release_context = ReleaseContext(
+        id=RELEASE_ID,
+        automated_task_as_user=AutomatedTaskAsUserContext(username="admin", password="admin"),
     )
-    def test_wired_client_performs_live_call(self):
-        """A property built by ApiBaseTask can talk to the live server."""
-        info = self.task.settingsApi.getInstanceInformation()
-        self.assertIsInstance(info, dict)
-        self.assertIn("version", info)
-        print(f"ApiBaseTask wired client instance information: {info}")
+    return task
 
 
-# Realistic ids, matching the documented sample input context. The phase and
-# folder ids are substrings the helpers derive from the task / release ids.
-FOLDER_ID = "Applications/Folder1f65c7220b394afbb941154342fd9fc6"
-RELEASE_ID = f"{FOLDER_ID}/Release31de09e95c8e4ebb95aaed29a8082d0b"
-PHASE_ID = f"{RELEASE_ID}/Phase723a601c78804f7dbcaa8b05b83708f5"
-TASK_ID = f"{PHASE_ID}/Task3a35b67b42b6428b854857fba470b39a"
+@pytest.fixture
+def client_class(monkeypatch):
+    """Replaces ReleaseAPIClient so no client is built; returns the stand-in class."""
+    fake = mock.Mock(name="ReleaseAPIClient", side_effect=lambda *a, **kw: mock.Mock(name="client"))
+    monkeypatch.setattr(base_task, "ReleaseAPIClient", fake)
+    return fake
 
 
-class TestApiBaseTaskContextHelpers(unittest.TestCase):
-    """Tests for the getCurrent*/...ByTitle/getVersion convenience helpers."""
-
-    def _stub_task(self, release_id=RELEASE_ID, task_id=TASK_ID):
-        """Build an ApiBaseTask with every API wrapper replaced by a MagicMock.
-
-        Returns the task plus the dict of stub APIs keyed by property name. The
-        class-level property overrides are removed again after the test.
-        """
-        task = _SampleApiTask()
-        task.task_id = task_id
-        task.release_context = SimpleNamespace(id=release_id)
-        task._api_instances = {}
-
-        apis = {name: MagicMock(name=name) for name in (
-            "releaseApi", "taskApi", "phaseApi", "folderApi", "settingsApi",
-            "configurationApi")}
-        for name, stub in apis.items():
-            setattr(type(task), name, property(lambda self, s=stub: s))
-        self.addCleanup(
-            lambda: [delattr(type(task), name) for name in apis])
-        return task, apis
-
-    def test_get_current_release_and_task(self):
-        task, apis = self._stub_task()
-        apis["releaseApi"].getRelease.return_value = SimpleNamespace(title="My Release")
-        apis["taskApi"].getTask.return_value = SimpleNamespace(title="My Task")
-
-        self.assertEqual(task.getCurrentRelease().title, "My Release")
-        self.assertEqual(task.getCurrentTask().title, "My Task")
-        apis["releaseApi"].getRelease.assert_called_once_with(RELEASE_ID)
-        apis["taskApi"].getTask.assert_called_once_with(TASK_ID)
-
-    def test_get_current_phase_and_folder_derive_ids(self):
-        task, apis = self._stub_task()
-        apis["phaseApi"].getPhase.return_value = SimpleNamespace(title="My Phase")
-        apis["folderApi"].getFolder.return_value = SimpleNamespace(title="My Folder")
-
-        self.assertEqual(task.getCurrentPhase().title, "My Phase")
-        self.assertEqual(task.getCurrentFolder().title, "My Folder")
-        apis["phaseApi"].getPhase.assert_called_once_with(PHASE_ID)
-        apis["folderApi"].getFolder.assert_called_once_with(FOLDER_ID)
-
-    def test_search_helpers_default_to_current_release(self):
-        task, apis = self._stub_task()
-        apis["taskApi"].searchTasksByTitle.return_value = ["t"]
-        apis["phaseApi"].searchPhasesByTitle.return_value = ["p"]
-        apis["releaseApi"].searchReleasesByTitle.return_value = ["r"]
-
-        self.assertEqual(task.getTasksByTitle("Deploy"), ["t"])
-        self.assertEqual(task.getPhasesByTitle("Prod"), ["p"])
-        self.assertEqual(task.getReleasesByTitle("Nightly"), ["r"])
-        # taskApi signature is (taskTitle, releaseId, phaseTitle).
-        apis["taskApi"].searchTasksByTitle.assert_called_once_with("Deploy", RELEASE_ID, None)
-        apis["phaseApi"].searchPhasesByTitle.assert_called_once_with("Prod", RELEASE_ID)
-        apis["releaseApi"].searchReleasesByTitle.assert_called_once_with("Nightly")
-
-    def test_search_helpers_honor_explicit_arguments(self):
-        task, apis = self._stub_task()
-        apis["taskApi"].searchTasksByTitle.return_value = []
-
-        task.getTasksByTitle("Deploy", "Prod", "Release/Other")
-
-        apis["taskApi"].searchTasksByTitle.assert_called_once_with(
-            "Deploy", "Release/Other", "Prod")
-
-    def test_get_version(self):
-        task, apis = self._stub_task()
-        apis["settingsApi"].getInstanceInformation.return_value = {
-            "product": "Digital.ai Release", "edition": "enterprise", "version": "25.3.0"}
-
-        self.assertEqual(task.getVersion(), "25.3.0")
-
-    # -- reference-variable resolution --------------------------------------
-
-    def test_get_release_variable_returns_stored_value_for_plain_variable(self):
-        """A non-reference variable returns its stored value without resolving."""
-        task, apis = self._stub_task()
-        apis["releaseApi"].getVariables.return_value = [
-            SimpleNamespace(key="relVar", value="hello", type="xlrelease.StringVariable")]
-
-        self.assertEqual(task.getReleaseVariable("relVar"), "hello")
-        # No need to consult the resolved-value map for a literal value.
-        apis["releaseApi"].getVariableValues.assert_not_called()
-
-    def test_get_release_variable_resolves_reference(self):
-        """A reference variable's value comes from the server-resolved map."""
-        task, apis = self._stub_task()
-        # The reference variable itself carries no literal value.
-        apis["releaseApi"].getVariables.return_value = [
-            SimpleNamespace(key="refVar", value="", type="xlrelease.ReferenceVariable")]
-        apis["releaseApi"].getVariableValues.return_value = {"${refVar}": "resolved-value"}
-
-        self.assertEqual(task.getReleaseVariable("refVar"), "resolved-value")
-        apis["releaseApi"].getVariableValues.assert_called_once_with(RELEASE_ID)
-
-    def test_get_folder_variable_resolves_reference(self):
-        """A reference folder variable resolves via listVariableValues."""
-        task, apis = self._stub_task()
-        apis["folderApi"].listVariables.return_value = [
-            SimpleNamespace(key="folder.refVar", value="",
-                            type="xlrelease.ReferenceVariable")]
-        apis["folderApi"].listVariableValues.return_value = {
-            "${folder.refVar}": "folder-resolved"}
-
-        self.assertEqual(task.getFolderVariable("folder.refVar"), "folder-resolved")
-        apis["folderApi"].listVariableValues.assert_called_once_with(FOLDER_ID)
-
-    def test_get_global_variable_resolves_reference(self):
-        """A reference global variable resolves via getGlobalVariableValues."""
-        task, apis = self._stub_task()
-        apis["configurationApi"].getGlobalVariables.return_value = [
-            SimpleNamespace(key="global.refVar", value="",
-                            type="xlrelease.ReferenceVariable")]
-        apis["configurationApi"].getGlobalVariableValues.return_value = {
-            "${global.refVar}": "global-resolved"}
-
-        self.assertEqual(task.getGlobalVariable("global.refVar"), "global-resolved")
-        apis["configurationApi"].getGlobalVariableValues.assert_called_once_with()
-
-    def test_reference_resolution_falls_back_to_stored_value(self):
-        """When the resolved map lacks the token, the stored value is returned."""
-        task, apis = self._stub_task()
-        apis["releaseApi"].getVariables.return_value = [
-            SimpleNamespace(key="refVar", value="stored",
-                            type="xlrelease.ReferenceVariable")]
-        apis["releaseApi"].getVariableValues.return_value = {}
-
-        self.assertEqual(task.getReleaseVariable("refVar"), "stored")
-
-    # -- setter value-type guard --------------------------------------------
-
-    def test_set_release_variable_rejects_type_mismatch(self):
-        """Assigning a str to an existing SetStringVariable raises TypeError."""
-        task, apis = self._stub_task()
-        apis["releaseApi"].getVariables.return_value = [
-            SimpleNamespace(id="Variable1", key="relSetVar", value=["a"],
-                            type="xlrelease.SetStringVariable")]
-
-        with self.assertRaises(TypeError):
-            task.setReleaseVariable("relSetVar", "not-a-set")
-        # The mismatched payload is never forwarded to the server.
-        apis["releaseApi"].updateVariable.assert_not_called()
-
-    def test_set_release_variable_rejects_int_for_string_variable(self):
-        """Assigning an int to an existing StringVariable raises TypeError."""
-        task, apis = self._stub_task()
-        apis["releaseApi"].getVariables.return_value = [
-            SimpleNamespace(id="Variable1", key="relVar", value="hello",
-                            type="xlrelease.StringVariable")]
-
-        with self.assertRaises(TypeError):
-            task.setReleaseVariable("relVar", 42)
-        apis["releaseApi"].updateVariable.assert_not_called()
-
-    def test_set_release_variable_accepts_matching_type(self):
-        """A set value for a SetStringVariable updates and coerces to a list."""
-        task, apis = self._stub_task()
-        variable = SimpleNamespace(id="Variable1", key="relSetVar", value=["a"],
-                                   type="xlrelease.SetStringVariable")
-        apis["releaseApi"].getVariables.return_value = [variable]
-        apis["releaseApi"].updateVariable.return_value = variable
-
-        task.setReleaseVariable("relSetVar", {"x", "y"})
-
-        self.assertEqual(set(variable.value), {"x", "y"})
-        self.assertIsInstance(variable.value, list)
-        apis["releaseApi"].updateVariable.assert_called_once_with("Variable1", variable)
-
-    def test_set_release_variable_does_not_guard_reference_variable(self):
-        """Reference variables are left for the server to validate."""
-        task, apis = self._stub_task()
-        variable = SimpleNamespace(id="Variable1", key="refVar", value="",
-                                   type="xlrelease.ReferenceVariable")
-        apis["releaseApi"].getVariables.return_value = [variable]
-        apis["releaseApi"].updateVariable.return_value = variable
-
-        # No TypeError despite a str value against a non-string-looking type.
-        task.setReleaseVariable("refVar", "anything")
-        apis["releaseApi"].updateVariable.assert_called_once()
-
-    def test_set_release_variable_does_not_guard_creation(self):
-        """A brand-new variable infers its type from the value, no guard."""
-        task, apis = self._stub_task()
-        apis["releaseApi"].getVariables.return_value = []
-        apis["releaseApi"].createVariable.return_value = SimpleNamespace(
-            type="xlrelease.IntegerVariable")
-
-        task.setReleaseVariable("relNewVar", 7)
-        apis["releaseApi"].createVariable.assert_called_once()
-        apis["releaseApi"].updateVariable.assert_not_called()
-
-    # -- date variable support ----------------------------------------------
-
-    def test_set_release_variable_accepts_datetime_for_date_variable(self):
-        """A datetime updates a DateVariable, coerced to an ISO-8601 string."""
-        task, apis = self._stub_task()
-        when = datetime(2026, 6, 24, 10, 30, 0)
-        variable = SimpleNamespace(id="Variable1", key="relDateVar", value=None,
-                                   type="xlrelease.DateVariable")
-        apis["releaseApi"].getVariables.return_value = [variable]
-        apis["releaseApi"].updateVariable.return_value = variable
-
-        task.setReleaseVariable("relDateVar", when)
-
-        self.assertEqual(variable.value, when.isoformat())
-        apis["releaseApi"].updateVariable.assert_called_once_with("Variable1", variable)
-
-    def test_set_release_variable_accepts_iso_string_for_date_variable(self):
-        """An ISO-8601 string is accepted for a DateVariable (server parses it)."""
-        task, apis = self._stub_task()
-        variable = SimpleNamespace(id="Variable1", key="relDateVar", value=None,
-                                   type="xlrelease.DateVariable")
-        apis["releaseApi"].getVariables.return_value = [variable]
-        apis["releaseApi"].updateVariable.return_value = variable
-
-        task.setReleaseVariable("relDateVar", "2026-06-24T10:30:00+00:00")
-
-        self.assertEqual(variable.value, "2026-06-24T10:30:00+00:00")
-        apis["releaseApi"].updateVariable.assert_called_once()
-
-    def test_set_release_variable_rejects_int_for_date_variable(self):
-        """A bare int is not a valid Python value for a DateVariable."""
-        task, apis = self._stub_task()
-        apis["releaseApi"].getVariables.return_value = [
-            SimpleNamespace(id="Variable1", key="relDateVar", value=None,
-                            type="xlrelease.DateVariable")]
-
-        with self.assertRaises(TypeError):
-            task.setReleaseVariable("relDateVar", 12345)
-        apis["releaseApi"].updateVariable.assert_not_called()
-
-    def test_set_release_variable_creates_date_variable_from_date(self):
-        """A new variable assigned a date infers the DateVariable type."""
-        task, apis = self._stub_task()
-        apis["releaseApi"].getVariables.return_value = []
-        captured = {}
-        apis["releaseApi"].createVariable.side_effect = (
-            lambda rid, var: captured.setdefault("var", var))
-
-        task.setReleaseVariable("relNewDateVar", date(2026, 6, 24))
-
-        self.assertEqual(captured["var"].type, "xlrelease.DateVariable")
-        self.assertEqual(captured["var"].value, "2026-06-24")
-
-    def test_set_release_variable_accepts_current_datetime(self):
-        """The current date/time updates a DateVariable as its ISO-8601 string."""
-        task, apis = self._stub_task()
-        now = datetime.now(timezone.utc)
-        variable = SimpleNamespace(id="Variable1", key="relDateVar", value=None,
-                                   type="xlrelease.DateVariable")
-        apis["releaseApi"].getVariables.return_value = [variable]
-        apis["releaseApi"].updateVariable.return_value = variable
-
-        task.setReleaseVariable("relDateVar", now)
-
-        self.assertEqual(variable.value, now.isoformat())
-        apis["releaseApi"].updateVariable.assert_called_once_with("Variable1", variable)
+@pytest.fixture
+def apis(task):
+    """
+    Signature-checked stand-ins for the APIs the helpers use, placed in the
+    task's API cache so the helpers pick them up instead of building real ones.
+    """
+    instances = {cls: mock.create_autospec(cls, instance=True)
+                 for cls in (ReleaseApi, TaskApi, PhaseApi, FolderApi, ConfigurationApi, SettingsApi)}
+    task._api_instances.update(instances)
+    return SimpleNamespace(release=instances[ReleaseApi], task=instances[TaskApi], phase=instances[PhaseApi],
+                           folder=instances[FolderApi], configuration=instances[ConfigurationApi],
+                           settings=instances[SettingsApi])
 
 
-if __name__ == "__main__":
-    unittest.main()
+def variable(key, value, vtype="xlrelease.StringVariable", **extra):
+    return Variable(id=f"{RELEASE_ID}/Variable_{key}", key=key, value=value, type=vtype, **extra)
+
+
+# -- client and API instances ----------------------------------------------
+
+def test_api_client_is_built_from_the_task_context_on_first_use(task, client_class):
+    client_class.assert_not_called()
+
+    client = task.apiClient
+
+    client_class.assert_called_once_with(SERVER_URL, "admin", "admin", timeout=None)
+    assert task.apiClient is client
+
+
+@pytest.mark.parametrize("name, api_class", API_PROPERTIES.items(), ids=list(API_PROPERTIES))
+def test_api_property_returns_a_cached_wrapper_on_the_shared_client(task, client_class, name, api_class):
+    api = getattr(task, name)
+
+    assert isinstance(api, api_class)
+    assert getattr(task, name) is api
+    assert api.api is task.apiClient
+
+
+def test_all_api_properties_share_one_client(task, client_class):
+    for name in API_PROPERTIES:
+        getattr(task, name)
+
+    client_class.assert_called_once()
+
+
+def test_reset_api_clients_rebuilds_the_client_and_wrappers(task, client_class):
+    old_client, old_release_api = task.apiClient, task.releaseApi
+
+    task.reset_api_clients()
+
+    assert task.apiClient is not old_client
+    assert task.releaseApi is not old_release_api
+    assert task.releaseApi.api is task.apiClient
+
+
+# -- current-context helpers -----------------------------------------------
+
+@pytest.mark.parametrize("helper, api, method, expected_id", [
+    ("getCurrentTask", "task", "getTask", TASK_ID),
+    ("getCurrentPhase", "phase", "getPhase", PHASE_ID),
+    ("getCurrentRelease", "release", "getRelease", RELEASE_ID),
+    ("getCurrentFolder", "folder", "getFolder", FOLDER_ID),
+])
+def test_get_current_object_fetches_it_by_the_derived_id(task, apis, helper, api, method, expected_id):
+    api_method = getattr(getattr(apis, api), method)
+
+    result = getattr(task, helper)()
+
+    api_method.assert_called_once_with(expected_id)
+    assert result is api_method.return_value
+
+
+def test_get_tasks_by_title_searches_the_current_release(task, apis):
+    result = task.getTasksByTitle("Deploy")
+
+    apis.task.searchTasksByTitle.assert_called_once_with("Deploy", RELEASE_ID, None)
+    assert result is apis.task.searchTasksByTitle.return_value
+
+
+def test_get_tasks_by_title_honours_phase_and_release(task, apis):
+    task.getTasksByTitle("Deploy", "Prod", "Applications/Release2")
+
+    apis.task.searchTasksByTitle.assert_called_once_with("Deploy", "Applications/Release2", "Prod")
+
+
+@pytest.mark.parametrize("release_id, expected", [(None, RELEASE_ID), ("Applications/Release2", "Applications/Release2")])
+def test_get_phases_by_title_defaults_to_the_current_release(task, apis, release_id, expected):
+    task.getPhasesByTitle("Prod", release_id)
+
+    apis.phase.searchPhasesByTitle.assert_called_once_with("Prod", expected)
+
+
+def test_get_releases_by_title_searches_all_releases(task, apis):
+    result = task.getReleasesByTitle("Nightly")
+
+    apis.release.searchReleasesByTitle.assert_called_once_with("Nightly")
+    assert result is apis.release.searchReleasesByTitle.return_value
+
+
+@pytest.mark.parametrize("info, expected", [({"version": "25.3.0", "edition": "enterprise"}, "25.3.0"), ({}, None)])
+def test_get_version_reads_the_instance_information(task, apis, info, expected):
+    apis.settings.getInstanceInformation.return_value = info
+
+    assert task.getVersion() == expected
+
+
+# -- variable getters and setters ------------------------------------------
+
+@dataclass(frozen=True)
+class Scope:
+    """How one variable scope maps onto ApiBaseTask helpers and API calls."""
+    name: str                       # variable name as a task author passes it
+    get: str                        # ApiBaseTask getter
+    set: str                        # ApiBaseTask setter
+    api: str                        # attribute of the `apis` fixture
+    list_variables: str             # API method listing the scope's variables
+    get_list_args: Tuple            # its arguments when reading
+    set_list_args: Tuple            # ... and when writing
+    set_list_kwargs: Dict[str, Any]
+    list_values: str                # API method returning the ${key} -> value map
+    create: str
+    create_args: Tuple              # arguments before the new Variable
+    update: str
+    update_args: Tuple              # arguments before the variable id
+
+
+SCOPES = {
+    "release": Scope("relVar", "getReleaseVariable", "setReleaseVariable", "release",
+                     "getVariables", (RELEASE_ID,), (RELEASE_ID,), {}, "getVariableValues",
+                     "createVariable", (RELEASE_ID,), "updateVariable", ()),
+    "folder": Scope("folder.myVar", "getFolderVariable", "setFolderVariable", "folder",
+                    "listVariables", (FOLDER_ID,), (FOLDER_ID,), {"folderOnly": True}, "listVariableValues",
+                    "createVariable", (FOLDER_ID,), "updateVariable", (FOLDER_ID,)),
+    "global": Scope("global.myVar", "getGlobalVariable", "setGlobalVariable", "configuration",
+                    "getGlobalVariables", (), (), {}, "getGlobalVariableValues",
+                    "addGlobalVariable", (), "updateGlobalVariable", ()),
+}
+
+scopes = pytest.mark.parametrize("scope", SCOPES.values(), ids=list(SCOPES))
+
+
+def scope_api(apis, scope):
+    return getattr(apis, scope.api)
+
+
+def stored(apis, scope, *variables):
+    getattr(scope_api(apis, scope), scope.list_variables).return_value = list(variables)
+
+
+@scopes
+def test_getter_returns_the_stored_value(task, apis, scope):
+    stored(apis, scope, variable("other", "x"), variable(scope.name, "value"))
+
+    assert getattr(task, scope.get)(scope.name) == "value"
+
+    getattr(scope_api(apis, scope), scope.list_variables).assert_called_once_with(*scope.get_list_args)
+    getattr(scope_api(apis, scope), scope.list_values).assert_not_called()
+
+
+@scopes
+def test_getter_resolves_a_reference_variable_on_the_server(task, apis, scope):
+    stored(apis, scope, variable(scope.name, None, "xlrelease.ReferenceVariable"))
+    values = getattr(scope_api(apis, scope), scope.list_values)
+    values.return_value = {f"${{{scope.name}}}": "resolved"}
+
+    assert getattr(task, scope.get)(scope.name) == "resolved"
+
+    values.assert_called_once_with(*scope.get_list_args)
+
+
+@scopes
+def test_getter_falls_back_to_the_stored_value_when_reference_is_unresolved(task, apis, scope):
+    stored(apis, scope, variable(scope.name, "stored", "xlrelease.ReferenceVariable"))
+    getattr(scope_api(apis, scope), scope.list_values).return_value = {}
+
+    assert getattr(task, scope.get)(scope.name) == "stored"
+
+
+@scopes
+def test_getter_raises_key_error_listing_available_names(task, apis, scope):
+    stored(apis, scope, variable("b", 1), variable("a", 2))
+
+    with pytest.raises(KeyError, match=r"\['a', 'b'\]"):
+        getattr(task, scope.get)(scope.name)
+
+
+@scopes
+def test_setter_updates_an_existing_variable(task, apis, scope):
+    existing = variable(scope.name, "old")
+    stored(apis, scope, existing)
+    update = getattr(scope_api(apis, scope), scope.update)
+
+    result = getattr(task, scope.set)(scope.name, "new")
+
+    getattr(scope_api(apis, scope), scope.list_variables).assert_called_once_with(
+        *scope.set_list_args, **scope.set_list_kwargs)
+    update.assert_called_once_with(*scope.update_args, existing.id, existing)
+    assert existing.value == "new"
+    assert result is update.return_value
+
+
+@scopes
+def test_setter_creates_a_missing_variable_with_an_inferred_type(task, apis, scope):
+    stored(apis, scope, variable("other", "x"))
+    create = getattr(scope_api(apis, scope), scope.create)
+
+    result = getattr(task, scope.set)(scope.name, {"b", "a"})
+
+    (*args, created), _ = create.call_args
+    assert tuple(args) == scope.create_args
+    assert (created.key, created.type, sorted(created.value)) == (scope.name, "xlrelease.SetStringVariable",
+                                                                  ["a", "b"])
+    assert (created.requiresValue, created.showOnReleaseStart) == (False, False)
+    getattr(scope_api(apis, scope), scope.update).assert_not_called()
+    assert result is create.return_value
+
+
+@scopes
+def test_setter_rejects_a_value_of_the_wrong_type(task, apis, scope):
+    stored(apis, scope, variable(scope.name, ["a"], "xlrelease.SetStringVariable"))
+
+    with pytest.raises(TypeError, match="Cannot assign str"):
+        getattr(task, scope.set)(scope.name, "not-a-set")
+
+    getattr(scope_api(apis, scope), scope.update).assert_not_called()
+
+
+@scopes
+def test_setter_leaves_reference_variables_to_the_server(task, apis, scope):
+    stored(apis, scope, variable(scope.name, None, "xlrelease.ReferenceVariable"))
+
+    getattr(task, scope.set)(scope.name, 42)
+
+    getattr(scope_api(apis, scope), scope.update).assert_called_once()
+
+
+@pytest.mark.parametrize("helper, args", [
+    ("getFolderVariable", ("myVar",)),
+    ("setFolderVariable", ("myVar", "x")),
+    ("getGlobalVariable", ("myVar",)),
+    ("setGlobalVariable", ("myVar", "x")),
+    ("getFolderVariable", ("global.myVar",)),
+    ("getGlobalVariable", ("folder.myVar",)),
+])
+def test_folder_and_global_helpers_require_the_scope_prefix(task, apis, helper, args):
+    with pytest.raises(ValueError, match="prefix"):
+        getattr(task, helper)(*args)
+
+    apis.folder.listVariables.assert_not_called()
+    apis.configuration.getGlobalVariables.assert_not_called()
+
+
+def test_set_release_variable_sends_a_datetime_as_iso_8601(task, apis):
+    existing = variable("when", None, "xlrelease.DateVariable")
+    stored(apis, SCOPES["release"], existing)
+
+    task.setReleaseVariable("when", datetime(2026, 6, 24, 10, 30, tzinfo=timezone.utc))
+
+    assert existing.value == "2026-06-24T10:30:00+00:00"
+
+
+# -- value typing rules ----------------------------------------------------
+
+@pytest.mark.parametrize("value, expected", [
+    (True, "xlrelease.BooleanVariable"),
+    (0, "xlrelease.IntegerVariable"),
+    (date(2026, 1, 1), "xlrelease.DateVariable"),
+    (datetime(2026, 1, 1, tzinfo=timezone.utc), "xlrelease.DateVariable"),
+    ({"k": "v"}, "xlrelease.MapStringStringVariable"),
+    (["a"], "xlrelease.SetStringVariable"),
+    ({"a"}, "xlrelease.SetStringVariable"),
+    (("a",), "xlrelease.SetStringVariable"),
+    ("text", "xlrelease.StringVariable"),
+    (1.5, "xlrelease.StringVariable"),
+], ids=["bool", "int", "date", "datetime", "dict", "list", "set", "tuple", "str", "float"])
+def test_new_variable_type_is_inferred_from_the_value(value, expected):
+    assert ApiBaseTask._variable_type_for_value(value) == expected
+
+
+@pytest.mark.parametrize("vtype, value", [
+    ("xlrelease.BooleanVariable", False),
+    ("xlrelease.IntegerVariable", 3),
+    ("xlrelease.DateVariable", date(2026, 1, 1)),
+    ("xlrelease.DateVariable", "2026-01-01T00:00:00Z"),
+    ("xlrelease.MapStringStringVariable", {"k": "v"}),
+    ("xlrelease.SetStringVariable", ("a",)),
+    ("xlrelease.StringVariable", "text"),
+    ("xlrelease.PasswordStringVariable", "secret"),
+    ("custom.UnknownVariable", object()),
+])
+def test_value_matching_the_variable_type_is_accepted(vtype, value):
+    assert ApiBaseTask._value_matches_type(vtype, value) is True
+
+
+@pytest.mark.parametrize("vtype, value", [
+    ("xlrelease.BooleanVariable", 1),
+    ("xlrelease.IntegerVariable", True),
+    ("xlrelease.IntegerVariable", "3"),
+    ("xlrelease.DateVariable", 12345),
+    ("xlrelease.MapStringStringVariable", [("k", "v")]),
+    ("xlrelease.SetStringVariable", "a"),
+    ("xlrelease.StringVariable", 42),
+    ("xlrelease.PasswordStringVariable", None),
+])
+def test_value_not_matching_the_variable_type_is_rejected(vtype, value):
+    assert ApiBaseTask._value_matches_type(vtype, value) is False
+
+
+@pytest.mark.parametrize("value, expected", [
+    ({"a"}, ["a"]),
+    (("a", "b"), ["a", "b"]),
+    (date(2026, 6, 24), "2026-06-24"),
+    (datetime(2026, 6, 24, 10, 30, tzinfo=timezone(timedelta(hours=2))), "2026-06-24T10:30:00+02:00"),
+    (["a"], ["a"]),
+    ({"k": "v"}, {"k": "v"}),
+    ("text", "text"),
+])
+def test_values_are_coerced_to_a_json_form(value, expected):
+    assert ApiBaseTask._coerce_value(value) == expected
+
+
+@pytest.mark.parametrize("candidate, expected", [
+    (variable("v", None, "xlrelease.ReferenceVariable"), True),
+    (variable("v", None, "xlrelease.StringVariable", valueProvider=ValueProvider()), True),
+    (variable("v", "x", "xlrelease.StringVariable"), False),
+    (variable("v", "x", None), False),
+], ids=["by-type", "by-value-provider", "plain", "untyped"])
+def test_reference_variables_are_detected(candidate, expected):
+    assert ApiBaseTask._is_reference_variable(candidate) is expected
