@@ -76,6 +76,21 @@ class ShowVersion(ApiBaseTask):
 
 ## Changelog
 
+### Unreleased
+
+#### 🚀 Features
+
+- Tasks can be aborted: the SDK runs `execute()` on a worker thread and handles `SIGABRT`/`SIGTERM` by calling the task's `abort()` hook. Long-running tasks can poll the new `is_abort_requested()` to stop cooperatively.
+- After an abort is requested, the SDK waits up to `ABORT_GRACE_PERIOD_SECONDS` (default 3) for `execute()` to return, so the outputs and reporting records a task sets on its way out are reported.
+- New `AiUsageRecord` reporting record (`udm.AiUsageRecord`) for one AI agent execution: LLM provider, model, agent, termination reason, iterations, tool calls, token counts and estimated cost. Add it with `add_reporting_record()` like the other records, but only on a Release version that defines `udm.AiUsageRecord`: an older server cannot read the task's result and fails the task.
+
+#### 🐛 Fixes
+
+- A signal received while the task result is being reported no longer cuts off the report; repeat signals during an abort are ignored.
+- An aborted result is never reported with exit code 0, and a task calling `sys.exit(n)` is reported with exit code `n`.
+- Tasks whose `__init__` does not call `super().__init__()` work again.
+- `setReleaseVariable()`, `setFolderVariable()` and `setGlobalVariable()` accept a list for an existing list variable (`xlrelease.ListStringVariable`); it was rejected with a `TypeError` as if the variable held a string.
+
 ### Version 26.3.1
 
 #### 🚀 Features

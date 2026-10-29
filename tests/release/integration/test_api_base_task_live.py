@@ -1,37 +1,24 @@
 """
-Live integration tests for :class:`ApiBaseTask`.
+ApiBaseTask helpers against a real Digital.ai Release server.
 
-These tests run against a *real* Digital.ai Release server (by default the
-developer instance on ``localhost:5516`` with ``admin``/``admin``). They build
-an ``ApiBaseTask`` wired exactly the way the Release runtime wires it -- a task
-context carrying the release id, the task id and the "Run as user" credentials
--- and then exercise the convenience helpers (``getCurrent*``, ``get*ByTitle``,
-the variable getters/setters and ``getVersion``) end to end.
+The server defaults to the developer instance on localhost:5516 with
+admin/admin; override with RELEASE_LIVE_URL, RELEASE_LIVE_USER and
+RELEASE_LIVE_PASSWORD. The module is skipped when the server is unreachable or
+rejects the credentials, so CI (which has no server) skips it.
 
-The suite is fully self-contained:
-
-* ``setUpClass`` first verifies the server is reachable, authentication works
-  and the API responds within a bounded timeout. If any of those checks fail
-  the whole suite is skipped (CI has no Release server).
-* It then creates every prerequisite object -- a folder, a template (moved into
-  that folder), a phase, a task, and release/folder/global variables -- and
-  spins up a release from the template so the task context points at real ids.
-* ``tearDownClass`` removes everything again; deleting the folder cascades to
-  the release and template, so the server is returned to its original state.
+A module-scoped fixture creates a folder, a template with a phase and a task,
+release/folder/global variables, and a release from the template, then deletes
+them afterwards. Tests that read a variable and tests that write one use
+different variables, so the tests do not depend on each other's order.
 """
-
+import os
 import socket
-import unittest
 import uuid
 from datetime import datetime, timezone
+from types import SimpleNamespace
+from urllib.parse import urlparse
 
-from digitalai.release.release_api_client import ReleaseAPIClient
-from digitalai.release.integration.api_base_task import ApiBaseTask
-from digitalai.release.integration.input_context import (
-    AutomatedTaskAsUserContext,
-    ReleaseContext,
-)
-
+import pytest
 from com.xebialabs.xlrelease.api.v1.configuration_api import ConfigurationApi
 from com.xebialabs.xlrelease.api.v1.folder_api import FolderApi
 from com.xebialabs.xlrelease.api.v1.phase_api import PhaseApi
@@ -45,648 +32,364 @@ from com.xebialabs.xlrelease.domain.release import Release
 from com.xebialabs.xlrelease.domain.task import Task
 from com.xebialabs.xlrelease.domain.variable import Variable
 
+from digitalai.release.integration.api_base_task import ApiBaseTask
+from digitalai.release.integration.input_context import AutomatedTaskAsUserContext, ReleaseContext
+from digitalai.release.release_api_client import ReleaseAPIClient
 
-# Live server connection details. Locally this is the developer's instance;
-# CI has no such server, so the suite skips itself when it is not reachable.
-LIVE_SERVER_HOST = "localhost"
-LIVE_SERVER_PORT = 5516
-LIVE_SERVER_URL = f"http://{LIVE_SERVER_HOST}:{LIVE_SERVER_PORT}"
-LIVE_SERVER_USER = "admin"
-LIVE_SERVER_PASSWORD = "admin"
+pytestmark = pytest.mark.live
 
-# Bounded timeout (connect, read) so an unresponsive server skips rather than
-# hangs the suite.
-LIVE_SERVER_TIMEOUT = (3.05, 10)
+SERVER_URL = os.getenv("RELEASE_LIVE_URL", "http://localhost:5516")
+USERNAME = os.getenv("RELEASE_LIVE_USER", "admin")
+PASSWORD = os.getenv("RELEASE_LIVE_PASSWORD", "admin")
+# (connect, read) seconds, so an unresponsive server fails fast instead of hanging.
+TIMEOUT = (3.05, 10)
+
+PHASE_TITLE = "Test Phase"
+TASK_TITLE = "Manual Task"
 
 
-def _server_reachable(host: str, port: int, timeout: float = 0.5) -> bool:
-    """Return True if a TCP connection to host:port succeeds within the timeout."""
+def server_reachable() -> bool:
+    url = urlparse(SERVER_URL)
+    port = url.port or (443 if url.scheme == "https" else 80)
     try:
-        with socket.create_connection((host, port), timeout=timeout):
+        with socket.create_connection((url.hostname, port), timeout=0.5):
             return True
     except OSError:
         return False
 
 
-class _LiveApiTask(ApiBaseTask):
-    """Concrete ApiBaseTask used to drive the helpers against the live server."""
+if not server_reachable():
+    pytest.skip(f"no Release server reachable at {SERVER_URL}", allow_module_level=True)
 
-    def execute(self) -> None:  # pragma: no cover - never executed by the tests
+
+class LiveApiTask(ApiBaseTask):
+    def execute(self) -> None:
         pass
 
 
-@unittest.skipUnless(
-    _server_reachable(LIVE_SERVER_HOST, LIVE_SERVER_PORT),
-    f"live Release server not available on {LIVE_SERVER_HOST}:{LIVE_SERVER_PORT}",
-)
-class TestApiBaseTaskLive(unittest.TestCase):
-    """Live integration tests for the ApiBaseTask convenience helpers."""
+def as_instant(value) -> datetime:
+    """A date variable value as an aware datetime; the server may format it with 'Z' or its own offset."""
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
 
-    # Populated by setUpClass; defaults keep tearDownClass safe if setup aborts.
-    client = None
-    uid = None
-    folder_id = None
-    folder_title = None
-    template_id = None
-    release_id = None
-    release_title = None
-    task_id = None
-    global_var_id = None
-    global_var_name = None
-    # Global variables created by the "create when missing" tests; tracked here so
-    # _cleanup can delete them (they live outside the folder, so the folder-delete
-    # cascade does not remove them).
-    created_global_var_ids = []
-    task = None
 
-    # -- lifecycle ----------------------------------------------------------
+def same_value(actual, expected) -> bool:
+    """Compares variable values; a set variable comes back as a list in server order."""
+    if isinstance(expected, list):
+        return set(actual) == set(expected)
+    return actual == expected
 
-    @classmethod
-    def setUpClass(cls):
-        uid = uuid.uuid4().hex[:10]
-        cls.uid = uid
-        cls.created_global_var_ids = []
-        cls.client = ReleaseAPIClient(
-            LIVE_SERVER_URL,
-            LIVE_SERVER_USER,
-            LIVE_SERVER_PASSWORD,
-            timeout=LIVE_SERVER_TIMEOUT,
-        )
 
-        # Skip gate: verify authentication works and the API responds. Any
-        # failure here (auth error, timeout, unreachable) skips the whole suite.
-        folder_api = FolderApi(cls.client)
-        try:
-            root_folders = folder_api.listRoot()
-            if not root_folders:
-                raise unittest.SkipTest("No root folders available on the server.")
-        except unittest.SkipTest:
-            raise
-        except Exception as exc:  # noqa: BLE001 - any failure means "skip"
-            raise unittest.SkipTest(
-                f"Release server authentication/API check failed: {exc}"
-            )
+def new_variable(vtype, key, value=None, **extra):
+    return Variable(type=vtype, key=key, value=value, requiresValue=False, showOnReleaseStart=False, **extra)
 
-        try:
-            cls._create_test_data(uid, root_folders[0].id)
-        except Exception:
-            # Clean up whatever was created before re-raising; unittest does not
-            # call tearDownClass when setUpClass fails.
-            cls._cleanup()
-            raise
 
-        # Build the ApiBaseTask exactly as the Release runtime would: server URL
-        # + "Run as user" credentials + the real release and task ids.
-        cls.task = _LiveApiTask()
-        cls.task.release_server_url = LIVE_SERVER_URL
-        cls.task.release_context = ReleaseContext(
-            id=cls.release_id,
-            automated_task_as_user=AutomatedTaskAsUserContext(
-                username=LIVE_SERVER_USER, password=LIVE_SERVER_PASSWORD
-            ),
-        )
-        cls.task.task_id = cls.task_id
-        print(f"Live ApiBaseTask wired to release {cls.release_id}")
+# Release variables seeded on the template: key -> (type, value).
+RELEASE_VARIABLES = {
+    "relVar": ("xlrelease.StringVariable", "release-value"),
+    "relSetVar": ("xlrelease.SetStringVariable", ["Apples", "Pears"]),
+    "relListVar": ("xlrelease.ListStringVariable", ["second", "first"]),
+    "relMapVar": ("xlrelease.MapStringStringVariable", {"env": "dev", "region": "us"}),
+    "relDateVar": ("xlrelease.DateVariable", "2026-01-02T03:04:05+00:00"),
+    # Written by the setter tests; never read by the getter tests.
+    "relVarRw": ("xlrelease.StringVariable", "initial"),
+    "relSetVarRw": ("xlrelease.SetStringVariable", ["initial"]),
+    "relListVarRw": ("xlrelease.ListStringVariable", ["initial"]),
+    "relMapVarRw": ("xlrelease.MapStringStringVariable", {"initial": "yes"}),
+    "relDateVarRw": ("xlrelease.DateVariable", "2026-01-02T03:04:05+00:00"),
+}
 
-    @classmethod
-    def _create_test_data(cls, uid: str, root_id: str):
-        """Create the folder/template/release/variables the helpers operate on."""
-        template_api = TemplateApi(cls.client)
-        folder_api = FolderApi(cls.client)
-        phase_api = PhaseApi(cls.client)
-        task_api = TaskApi(cls.client)
-        config_api = ConfigurationApi(cls.client)
 
-        # Folder (under root) that will contain the release.
-        cls.folder_title = f"AbtLiveFolder_{uid}"
-        folder = folder_api.addFolder(root_id, Folder(title=cls.folder_title))
-        cls.folder_id = folder.id
-        print(f"Created folder: {cls.folder_id}")
+class Cleanup:
+    """Deletes what the fixture created, best effort, in reverse dependency order."""
 
-        # Template at root with a phase, a manual task and a release variable.
-        template_title = f"AbtLiveTemplate_{uid}"
-        payload = {
-            "id": f"Applications/Release_abt_live_{uid}",
-            "title": template_title,
-            "type": "xlrelease.Release",
-            "status": "TEMPLATE",
-            "scheduledStartDate": "2026-06-01T00:00:00+00:00",
-            "dueDate": "2026-07-01T00:00:00+00:00",
-        }
-        response = cls.client.post("/api/v1/templates", json=payload)
-        response.raise_for_status()
-        root_template = Release.from_dict(response.json())
+    def __init__(self, client):
+        self.client = client
+        self.release_id = None
+        self.template_id = None
+        self.folder_id = None
+        self.global_variable_ids = []
 
-        phase = phase_api.addPhase(
-            root_template.id, Phase(title="Test Phase", type="xlrelease.Phase")
-        )
-        task_api.addTask(phase.id, Task(title="Manual Task", type="xlrelease.Task"))
-        template_api.createVariable(
-            root_template.id,
-            Variable(
-                type="xlrelease.StringVariable",
-                key="relVar",
-                value="release-value",
-                requiresValue=False,
-                showOnReleaseStart=False,
-            ),
-        )
-        # A set (set-of-string) release variable; its value round-trips as a list.
-        template_api.createVariable(
-            root_template.id,
-            Variable(
-                type="xlrelease.SetStringVariable",
-                key="relSetVar",
-                value=["Apples", "Pears"],
-                requiresValue=False,
-                showOnReleaseStart=False,
-            ),
-        )
-        # A key/value-map release variable; its value round-trips as a dict.
-        template_api.createVariable(
-            root_template.id,
-            Variable(
-                type="xlrelease.MapStringStringVariable",
-                key="relMapVar",
-                value={"env": "dev", "region": "us"},
-                requiresValue=False,
-                showOnReleaseStart=False,
-            ),
-        )
-        # A date release variable; its value round-trips as an ISO-8601 string.
-        template_api.createVariable(
-            root_template.id,
-            Variable(
-                type="xlrelease.DateVariable",
-                key="relDateVar",
-                value="2026-01-02T03:04:05+00:00",
-                requiresValue=False,
-                showOnReleaseStart=False,
-            ),
-        )
-        # A reference release variable. It holds no literal value -- the server
-        # resolves it from a value provider -- so getReleaseVariable must read
-        # its value from the server-resolved value map rather than `.value`.
-        template_api.createVariable(
-            root_template.id,
-            Variable(
-                type="xlrelease.ReferenceVariable",
-                key="relRefVar",
-                referencedType="xlrelease.StringVariable",
-                requiresValue=False,
-                showOnReleaseStart=False,
-            ),
-        )
-
-        # Move the template into the folder so releases created from it live
-        # inside the folder (required for getCurrentFolder to resolve).
-        folder_api.moveTemplate(cls.folder_id, root_template.id)
-        moved = [
-            t for t in folder_api.getTemplates(cls.folder_id)
-            if t.title == template_title
-        ]
-        if not moved:
-            raise RuntimeError("Template not found in folder after move.")
-        cls.template_id = moved[0].id
-        print(f"Created template in folder: {cls.template_id}")
-
-        # A folder-owned variable.
-        folder_api.createVariable(
-            cls.folder_id,
-            Variable(
-                type="xlrelease.StringVariable",
-                key="folder.folderVar",
-                value="folder-value",
-                requiresValue=False,
-                showOnReleaseStart=False,
-            ),
-        )
-
-        # A global variable (lives outside the folder; deleted explicitly later).
-        cls.global_var_name = f"abtLiveGlobal_{uid}"
-        global_var = config_api.addGlobalVariable(
-            Variable(
-                type="xlrelease.StringVariable",
-                key=f"global.{cls.global_var_name}",
-                value="global-value",
-                requiresValue=False,
-                showOnReleaseStart=False,
-            )
-        )
-        cls.global_var_id = global_var.id
-        print(f"Created global variable: {cls.global_var_id}")
-
-        # Create the release from the template; it inherits the phase, task and
-        # release variable, and lives inside the folder.
-        cls.release_title = f"AbtLiveRelease_{uid}"
-        release = template_api.create(
-            cls.template_id, CreateRelease(releaseTitle=cls.release_title)
-        )
-        cls.release_id = release.id
-        print(f"Created release: {cls.release_id}")
-
-        # Resolve the task id of the release's manual task -> the task context.
-        tasks = task_api.searchTasksByTitle("Manual Task", cls.release_id)
-        if not tasks:
-            raise RuntimeError("Manual Task not found in created release.")
-        cls.task_id = tasks[0].id
-        print(f"Resolved task id: {cls.task_id}")
-
-    @classmethod
-    def _cleanup(cls):
-        """Best-effort removal of every object created by the suite."""
-        client = cls.client
-        if client is None:
-            return
-
-        if cls.release_id:
-            release_api = ReleaseApi(client)
+    def run(self):
+        steps = []
+        if self.release_id:
+            steps += [lambda: ReleaseApi(self.client).abort(self.release_id, "Test cleanup"),
+                      lambda: ReleaseApi(self.client).delete(self.release_id)]
+        if self.template_id:
+            steps.append(lambda: TemplateApi(self.client).deleteTemplate(self.template_id))
+        steps += [lambda v=v: ConfigurationApi(self.client).deleteGlobalVariable(v) for v in self.global_variable_ids]
+        if self.folder_id:
+            # Deleting the folder also removes anything still inside it.
+            steps.append(lambda: FolderApi(self.client).delete(self.folder_id))
+        for step in steps:
             try:
-                release_api.abort(cls.release_id, "Aborting for test cleanup")
-            except Exception:
-                pass
-            try:
-                release_api.delete(cls.release_id)
-            except Exception:
+                step()
+            except Exception:  # noqa: BLE001 - keep cleaning up
                 pass
 
-        if cls.template_id:
-            try:
-                TemplateApi(client).deleteTemplate(cls.template_id)
-            except Exception:
-                pass
 
-        if cls.global_var_id:
-            try:
-                ConfigurationApi(client).deleteGlobalVariable(cls.global_var_id)
-            except Exception:
-                pass
+@pytest.fixture(scope="module")
+def live():
+    client = ReleaseAPIClient(SERVER_URL, USERNAME, PASSWORD, timeout=TIMEOUT)
+    try:
+        root_folders = FolderApi(client).listRoot()
+    except Exception as exc:  # noqa: BLE001 - any failure here means "no usable server"
+        client.close()
+        pytest.skip(f"Release server at {SERVER_URL} rejected the API check: {exc}")
+    if not root_folders:
+        client.close()
+        pytest.skip("Release server has no root folder to create test data in")
 
-        # Global variables created by the "create when missing" tests.
-        for var_id in cls.created_global_var_ids:
-            try:
-                ConfigurationApi(client).deleteGlobalVariable(var_id)
-            except Exception:
-                pass
-
-        # Deleting the folder cascades to anything still inside it (release,
-        # template), so this is the catch-all that restores the server state.
-        if cls.folder_id:
-            try:
-                FolderApi(client).delete(cls.folder_id)
-            except Exception:
-                pass
-
-    @classmethod
-    def tearDownClass(cls):
-        cls._cleanup()
-
-    # -- getVersion ---------------------------------------------------------
-
-    def test_01_get_version(self):
-        """getVersion returns the server's version string."""
-        version = self.task.getVersion()
-        self.assertIsInstance(version, str)
-        self.assertTrue(version)
-        print(f"getVersion -> {version}")
-
-    # -- getCurrent* --------------------------------------------------------
-
-    def test_02_get_current_release(self):
-        """getCurrentRelease returns the release the task belongs to."""
-        release = self.task.getCurrentRelease()
-        self.assertEqual(release.id, self.release_id)
-        self.assertEqual(release.title, self.release_title)
-        print(f"getCurrentRelease -> {release.title}")
-
-    def test_03_get_current_task(self):
-        """getCurrentTask returns the task running the code."""
-        task = self.task.getCurrentTask()
-        self.assertEqual(task.id, self.task_id)
-        self.assertEqual(task.title, "Manual Task")
-        print(f"getCurrentTask -> {task.title}")
-
-    def test_04_get_current_phase(self):
-        """getCurrentPhase returns the phase that contains the task."""
-        phase = self.task.getCurrentPhase()
-        self.assertEqual(phase.id, self.task.get_phase_id())
-        self.assertEqual(phase.title, "Test Phase")
-        print(f"getCurrentPhase -> {phase.title}")
-
-    def test_05_get_current_folder(self):
-        """getCurrentFolder returns the folder that contains the release."""
-        folder = self.task.getCurrentFolder()
-        self.assertEqual(folder.id, self.folder_id)
-        self.assertEqual(folder.title, self.folder_title)
-        print(f"getCurrentFolder -> {folder.title}")
-
-    # -- release variables --------------------------------------------------
-
-    def test_06_get_release_variable(self):
-        """getReleaseVariable returns the value of a current-release variable."""
-        value = self.task.getReleaseVariable("relVar")
-        self.assertEqual(value, "release-value")
-        print(f"getReleaseVariable('relVar') -> {value}")
-
-    def test_07_set_release_variable(self):
-        """setReleaseVariable persists a new value, readable back via the getter."""
-        updated = self.task.setReleaseVariable("relVar", "release-value-updated")
-        self.assertEqual(updated.value, "release-value-updated")
-        self.assertEqual(
-            self.task.getReleaseVariable("relVar"), "release-value-updated"
-        )
-        print("setReleaseVariable('relVar') -> release-value-updated")
-
-    def test_08_get_release_variable_missing_raises(self):
-        """getReleaseVariable raises KeyError for an unknown variable name."""
-        with self.assertRaises(KeyError):
-            self.task.getReleaseVariable("doesNotExist")
-        print("getReleaseVariable(unknown) correctly raised KeyError")
-
-    # -- release variables: set (set-of-string) -----------------------------
-
-    def test_08a_get_release_set_variable(self):
-        """getReleaseVariable returns a set variable's value as a list."""
-        value = self.task.getReleaseVariable("relSetVar")
-        # A set is unordered on the server, so compare membership, not order.
-        self.assertEqual(set(value), {"Apples", "Pears"})
-        print(f"getReleaseVariable('relSetVar') -> {value}")
-
-    def test_08b_set_release_set_variable(self):
-        """setReleaseVariable persists a new set value, readable back via the getter."""
-        new_value = ["Oranges", "Bananas", "Grapes"]
-        updated = self.task.setReleaseVariable("relSetVar", new_value)
-        self.assertEqual(set(updated.value), set(new_value))
-        self.assertEqual(
-            set(self.task.getReleaseVariable("relSetVar")), set(new_value)
-        )
-        print(f"setReleaseVariable('relSetVar') -> {new_value}")
-
-    # -- release variables: key/value map -----------------------------------
-
-    def test_08c_get_release_map_variable(self):
-        """getReleaseVariable returns a key/value-map variable's value as a dict."""
-        value = self.task.getReleaseVariable("relMapVar")
-        self.assertEqual(value, {"env": "dev", "region": "us"})
-        print(f"getReleaseVariable('relMapVar') -> {value}")
-
-    def test_08d_set_release_map_variable(self):
-        """setReleaseVariable persists a new map value, readable back via the getter."""
-        new_value = {"env": "prod", "region": "eu", "tier": "gold"}
-        updated = self.task.setReleaseVariable("relMapVar", new_value)
-        self.assertEqual(updated.value, new_value)
-        self.assertEqual(self.task.getReleaseVariable("relMapVar"), new_value)
-        print(f"setReleaseVariable('relMapVar') -> {new_value}")
-
-    # -- release variables: date --------------------------------------------
-
-    def test_08c1_get_release_date_variable(self):
-        """getReleaseVariable returns a date variable's value as an ISO-8601 string."""
-        value = self.task.getReleaseVariable("relDateVar")
-        # The server stores the seeded instant; compare instants, not the
-        # literal string (the server formats in its own timezone).
-        stored = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        self.assertEqual(stored, datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc))
-        print(f"getReleaseVariable('relDateVar') -> {value}")
-
-    def test_08c2_set_release_date_variable(self):
-        """setReleaseVariable persists a datetime, readable back via the getter."""
-        # The server stores dates to second precision, so drop microseconds.
-        new_value = datetime(2027, 7, 8, 9, 10, 11, tzinfo=timezone.utc)
-        updated = self.task.setReleaseVariable("relDateVar", new_value)
-        # The SDK coerces the datetime to its ISO-8601 string before sending; the
-        # server echoes it back normalised to its own timezone (e.g. trailing
-        # 'Z'), so compare the instant rather than the literal string.
-        self.assertEqual(
-            datetime.fromisoformat(str(updated.value).replace("Z", "+00:00")),
-            new_value,
-        )
-        read_back = datetime.fromisoformat(
-            str(self.task.getReleaseVariable("relDateVar")).replace("Z", "+00:00")
-        )
-        self.assertEqual(read_back, new_value)
-        print(f"setReleaseVariable('relDateVar') -> {new_value.isoformat()}")
-
-    def test_08c3_set_release_date_variable_current_time(self):
-        """setReleaseVariable accepts the current date/time and round-trips it."""
-        now = datetime.now(timezone.utc).replace(microsecond=0)
-        self.task.setReleaseVariable("relDateVar", now)
-        read_back = datetime.fromisoformat(
-            str(self.task.getReleaseVariable("relDateVar")).replace("Z", "+00:00")
-        )
-        self.assertEqual(read_back, now)
-        print(f"setReleaseVariable('relDateVar') current time -> {now.isoformat()}")
-
-    # -- release variables: reference ---------------------------------------
-
-    def test_08h_get_release_reference_variable(self):
-        """getReleaseVariable returns a reference variable's server-resolved value.
-
-        A reference variable carries no literal value (``.value`` is empty); the
-        getter must read it from the resolved value map. The reference here has
-        no real provider target, so it resolves to an empty string -- but the
-        getter must return exactly what the resolved map holds for ``${key}``,
-        proving it delegates resolution to the server rather than returning the
-        raw (empty) ``.value``.
-        """
-        resolved = self.task.releaseApi.getVariableValues(self.release_id)
-        expected = resolved.get("${relRefVar}")
-        self.assertIsNotNone(expected, "reference variable missing from value map")
-        self.assertEqual(self.task.getReleaseVariable("relRefVar"), expected)
-        print(f"getReleaseVariable('relRefVar') -> {expected!r} (server-resolved)")
-
-    # -- release variables: create when missing -----------------------------
-
-    def test_08e_set_release_variable_creates_when_missing(self):
-        """setReleaseVariable creates a string variable when the key is unknown."""
-        created = self.task.setReleaseVariable("relNewVar", "created-value")
-        self.assertEqual(created.key, "relNewVar")
-        self.assertEqual(created.type, "xlrelease.StringVariable")
-        self.assertEqual(created.value, "created-value")
-        self.assertEqual(self.task.getReleaseVariable("relNewVar"), "created-value")
-        print("setReleaseVariable('relNewVar') created -> created-value")
-
-    def test_08f_set_release_set_variable_creates_when_missing(self):
-        """setReleaseVariable creates a set variable when the key is unknown."""
-        new_value = ["red", "green", "blue"]
-        created = self.task.setReleaseVariable("relNewSetVar", new_value)
-        self.assertEqual(created.type, "xlrelease.SetStringVariable")
-        self.assertEqual(set(created.value), set(new_value))
-        self.assertEqual(
-            set(self.task.getReleaseVariable("relNewSetVar")), set(new_value)
-        )
-        print(f"setReleaseVariable('relNewSetVar') created -> {new_value}")
-
-    def test_08g_set_release_map_variable_creates_when_missing(self):
-        """setReleaseVariable creates a map variable when the key is unknown."""
-        new_value = {"stage": "qa", "owner": "team-a"}
-        created = self.task.setReleaseVariable("relNewMapVar", new_value)
-        self.assertEqual(created.type, "xlrelease.MapStringStringVariable")
-        self.assertEqual(created.value, new_value)
-        self.assertEqual(self.task.getReleaseVariable("relNewMapVar"), new_value)
-        print(f"setReleaseVariable('relNewMapVar') created -> {new_value}")
-
-    # -- folder variables ---------------------------------------------------
-
-    def test_09_get_folder_variable(self):
-        """getFolderVariable resolves a folder variable by its prefixed name."""
-        self.assertEqual(
-            self.task.getFolderVariable("folder.folderVar"), "folder-value"
-        )
-        print("getFolderVariable('folder.folderVar') -> folder-value")
-
-    def test_09a_get_folder_variable_requires_prefix(self):
-        """getFolderVariable raises ValueError when the folder. prefix is missing."""
-        with self.assertRaises(ValueError):
-            self.task.getFolderVariable("folderVar")
-        print("getFolderVariable('folderVar') correctly raised ValueError")
-
-    def test_10_set_folder_variable(self):
-        """setFolderVariable persists a new value on the folder-owned variable."""
-        updated = self.task.setFolderVariable(
-            "folder.folderVar", "folder-value-updated"
-        )
-        self.assertEqual(updated.value, "folder-value-updated")
-        self.assertEqual(
-            self.task.getFolderVariable("folder.folderVar"), "folder-value-updated"
-        )
-        print("setFolderVariable('folder.folderVar') -> folder-value-updated")
-
-    def test_10_set_folder_variable_requires_prefix(self):
-        """setFolderVariable raises ValueError when the folder. prefix is missing."""
-        with self.assertRaises(ValueError):
-            self.task.setFolderVariable("folderVar", "nope")
-        print("setFolderVariable('folderVar') correctly raised ValueError")
-
-    # -- folder variables: create when missing ------------------------------
-
-    def test_10a_set_folder_variable_creates_when_missing(self):
-        """setFolderVariable creates a folder-owned variable when the key is unknown."""
-        created = self.task.setFolderVariable("folder.folderNewVar", "folder-created")
-        self.assertEqual(created.key, "folder.folderNewVar")
-        self.assertEqual(created.type, "xlrelease.StringVariable")
-        self.assertEqual(created.value, "folder-created")
-        self.assertEqual(
-            self.task.getFolderVariable("folder.folderNewVar"), "folder-created"
-        )
-        print("setFolderVariable('folder.folderNewVar') created -> folder-created")
-
-    def test_10b_set_folder_set_variable_creates_when_missing(self):
-        """setFolderVariable creates a set variable when the key is unknown."""
-        new_value = ["alpha", "beta"]
-        created = self.task.setFolderVariable("folder.folderNewSetVar", new_value)
-        self.assertEqual(created.type, "xlrelease.SetStringVariable")
-        self.assertEqual(set(created.value), set(new_value))
-        self.assertEqual(
-            set(self.task.getFolderVariable("folder.folderNewSetVar")), set(new_value)
-        )
-        print(f"setFolderVariable('folder.folderNewSetVar') created -> {new_value}")
-
-    def test_10c_set_folder_map_variable_creates_when_missing(self):
-        """setFolderVariable creates a map variable when the key is unknown."""
-        new_value = {"team": "infra", "tier": "silver"}
-        created = self.task.setFolderVariable("folder.folderNewMapVar", new_value)
-        self.assertEqual(created.type, "xlrelease.MapStringStringVariable")
-        self.assertEqual(created.value, new_value)
-        self.assertEqual(
-            self.task.getFolderVariable("folder.folderNewMapVar"), new_value
-        )
-        print(f"setFolderVariable('folder.folderNewMapVar') created -> {new_value}")
-
-    # -- global variables ---------------------------------------------------
-
-    def test_11_get_global_variable(self):
-        """getGlobalVariable resolves a global variable by its prefixed name."""
-        self.assertEqual(
-            self.task.getGlobalVariable(f"global.{self.global_var_name}"),
-            "global-value",
-        )
-        print(f"getGlobalVariable('global.{self.global_var_name}') -> global-value")
-
-    def test_11a_get_global_variable_requires_prefix(self):
-        """getGlobalVariable raises ValueError when the global. prefix is missing."""
-        with self.assertRaises(ValueError):
-            self.task.getGlobalVariable(self.global_var_name)
-        print("getGlobalVariable(unprefixed) correctly raised ValueError")
-
-    def test_12_set_global_variable(self):
-        """setGlobalVariable persists a new value on the global variable."""
-        key = f"global.{self.global_var_name}"
-        updated = self.task.setGlobalVariable(key, "global-value-updated")
-        self.assertEqual(updated.value, "global-value-updated")
-        self.assertEqual(self.task.getGlobalVariable(key), "global-value-updated")
-        print(f"setGlobalVariable('{key}') -> global-value-updated")
-
-    def test_12_set_global_variable_requires_prefix(self):
-        """setGlobalVariable raises ValueError when the global. prefix is missing."""
-        with self.assertRaises(ValueError):
-            self.task.setGlobalVariable(self.global_var_name, "nope")
-        print("setGlobalVariable(unprefixed) correctly raised ValueError")
-
-    # -- global variables: create when missing ------------------------------
-
-    def test_12a_set_global_variable_creates_when_missing(self):
-        """setGlobalVariable creates a global variable when the key is unknown."""
-        name = f"global.abtLiveGlobalNew_{self.uid}"
-        created = self.task.setGlobalVariable(name, "global-created")
-        self.created_global_var_ids.append(created.id)
-        self.assertEqual(created.key, name)
-        self.assertEqual(created.type, "xlrelease.StringVariable")
-        self.assertEqual(created.value, "global-created")
-        self.assertEqual(self.task.getGlobalVariable(name), "global-created")
-        print(f"setGlobalVariable('{name}') created -> global-created")
-
-    def test_12b_set_global_set_variable_creates_when_missing(self):
-        """setGlobalVariable creates a set variable when the key is unknown."""
-        name = f"global.abtLiveGlobalNewSet_{self.uid}"
-        new_value = ["x", "y", "z"]
-        created = self.task.setGlobalVariable(name, new_value)
-        self.created_global_var_ids.append(created.id)
-        self.assertEqual(created.type, "xlrelease.SetStringVariable")
-        self.assertEqual(set(created.value), set(new_value))
-        self.assertEqual(set(self.task.getGlobalVariable(name)), set(new_value))
-        print(f"setGlobalVariable('{name}') created -> {new_value}")
-
-    def test_12c_set_global_map_variable_creates_when_missing(self):
-        """setGlobalVariable creates a map variable when the key is unknown."""
-        name = f"global.abtLiveGlobalNewMap_{self.uid}"
-        new_value = {"region": "ap", "tier": "bronze"}
-        created = self.task.setGlobalVariable(name, new_value)
-        self.created_global_var_ids.append(created.id)
-        self.assertEqual(created.type, "xlrelease.MapStringStringVariable")
-        self.assertEqual(created.value, new_value)
-        self.assertEqual(self.task.getGlobalVariable(name), new_value)
-        print(f"setGlobalVariable('{name}') created -> {new_value}")
-
-    # -- ...ByTitle ---------------------------------------------------------
-
-    def test_13_get_phases_by_title(self):
-        """getPhasesByTitle finds the phase by title in the current release."""
-        phases = self.task.getPhasesByTitle("Test Phase")
-        self.assertGreaterEqual(len(phases), 1)
-        self.assertTrue(all(p.title == "Test Phase" for p in phases))
-        print(f"getPhasesByTitle('Test Phase') -> {len(phases)} phase(s)")
-
-    def test_14_get_tasks_by_title(self):
-        """getTasksByTitle finds the task by title, optionally scoped to a phase."""
-        tasks = self.task.getTasksByTitle("Manual Task")
-        self.assertGreaterEqual(len(tasks), 1)
-        self.assertTrue(any(t.id == self.task_id for t in tasks))
-
-        scoped = self.task.getTasksByTitle("Manual Task", "Test Phase")
-        self.assertGreaterEqual(len(scoped), 1)
-        print(
-            f"getTasksByTitle('Manual Task') -> {len(tasks)} task(s), "
-            f"scoped to phase -> {len(scoped)} task(s)"
-        )
-
-    def test_15_get_releases_by_title(self):
-        """getReleasesByTitle finds the current release by its title."""
-        releases = self.task.getReleasesByTitle(self.release_title)
-        self.assertGreaterEqual(len(releases), 1)
-        self.assertTrue(any(r.id == self.release_id for r in releases))
-        print(f"getReleasesByTitle('{self.release_title}') -> {len(releases)} release(s)")
+    uid = uuid.uuid4().hex[:10]
+    cleanup = Cleanup(client)
+    try:
+        yield create_test_data(client, cleanup, uid, root_folders[0].id)
+    finally:
+        cleanup.run()
+        client.close()
 
 
-if __name__ == "__main__":
-    unittest.main()
+def create_test_data(client, cleanup, uid, root_folder_id):
+    folder_api, template_api = FolderApi(client), TemplateApi(client)
+    config_api = ConfigurationApi(client)
+
+    folder_title = f"AbtLiveFolder_{uid}"
+    folder_id = folder_api.addFolder(root_folder_id, Folder(title=folder_title)).id
+    cleanup.folder_id = folder_id
+
+    template_title = f"AbtLiveTemplate_{uid}"
+    response = client.post("/api/v1/templates", json={
+        "id": f"Applications/Release_abt_live_{uid}",
+        "title": template_title,
+        "type": "xlrelease.Release",
+        "status": "TEMPLATE",
+        "scheduledStartDate": "2026-06-01T00:00:00+00:00",
+        "dueDate": "2026-07-01T00:00:00+00:00",
+    })
+    response.raise_for_status()
+    root_template_id = Release.from_dict(response.json()).id
+    cleanup.template_id = root_template_id
+
+    phase = PhaseApi(client).addPhase(root_template_id, Phase(title=PHASE_TITLE, type="xlrelease.Phase"))
+    TaskApi(client).addTask(phase.id, Task(title=TASK_TITLE, type="xlrelease.Task"))
+    for key, (vtype, value) in RELEASE_VARIABLES.items():
+        template_api.createVariable(root_template_id, new_variable(vtype, key, value))
+    # A reference variable holds no literal value: the server resolves it from a value provider.
+    template_api.createVariable(root_template_id, new_variable(
+        "xlrelease.ReferenceVariable", "relRefVar", referencedType="xlrelease.StringVariable"))
+
+    # Releases created from a template inside the folder live in that folder.
+    folder_api.moveTemplate(folder_id, root_template_id)
+    template_id = next(t.id for t in folder_api.getTemplates(folder_id) if t.title == template_title)
+    cleanup.template_id = template_id
+
+    for key, value in (("folder.folderVar", "folder-value"), ("folder.folderVarRw", "initial")):
+        folder_api.createVariable(folder_id, new_variable("xlrelease.StringVariable", key, value))
+
+    global_names = {}
+    for name, value in (("read", "global-value"), ("rw", "initial")):
+        key = f"global.abtLive_{name}_{uid}"
+        created = config_api.addGlobalVariable(new_variable("xlrelease.StringVariable", key, value))
+        cleanup.global_variable_ids.append(created.id)
+        global_names[name] = key
+
+    release_title = f"AbtLiveRelease_{uid}"
+    release_id = template_api.create(template_id, CreateRelease(releaseTitle=release_title)).id
+    cleanup.release_id = release_id
+    task_id = TaskApi(client).searchTasksByTitle(TASK_TITLE, release_id)[0].id
+
+    task = LiveApiTask()
+    task.release_server_url = SERVER_URL
+    task.release_context = ReleaseContext(
+        id=release_id, automated_task_as_user=AutomatedTaskAsUserContext(username=USERNAME, password=PASSWORD))
+    task.task_id = task_id
+
+    return SimpleNamespace(task=task, uid=uid, folder_id=folder_id, folder_title=folder_title,
+                           release_id=release_id, release_title=release_title, task_id=task_id,
+                           global_read=global_names["read"], global_rw=global_names["rw"], cleanup=cleanup)
+
+
+# -- server and current context --------------------------------------------
+
+def test_get_version_returns_the_server_version(live):
+    version = live.task.getVersion()
+
+    assert isinstance(version, str) and version
+
+
+def test_get_current_release(live):
+    release = live.task.getCurrentRelease()
+
+    assert (release.id, release.title) == (live.release_id, live.release_title)
+
+
+def test_get_current_task(live):
+    task = live.task.getCurrentTask()
+
+    assert (task.id, task.title) == (live.task_id, TASK_TITLE)
+
+
+def test_get_current_phase(live):
+    phase = live.task.getCurrentPhase()
+
+    assert (phase.id, phase.title) == (live.task.get_phase_id(), PHASE_TITLE)
+
+
+def test_get_current_folder(live):
+    folder = live.task.getCurrentFolder()
+
+    assert (folder.id, folder.title) == (live.folder_id, live.folder_title)
+
+
+# -- release variables -----------------------------------------------------
+
+@pytest.mark.parametrize("key, expected", [
+    ("relVar", "release-value"),
+    ("relListVar", ["second", "first"]),
+    ("relMapVar", {"env": "dev", "region": "us"}),
+])
+def test_get_release_variable(live, key, expected):
+    assert live.task.getReleaseVariable(key) == expected
+
+
+def test_get_release_set_variable_returns_its_members(live):
+    assert set(live.task.getReleaseVariable("relSetVar")) == {"Apples", "Pears"}
+
+
+def test_get_release_date_variable_returns_the_stored_instant(live):
+    assert as_instant(live.task.getReleaseVariable("relDateVar")) == datetime(2026, 1, 2, 3, 4, 5,
+                                                                               tzinfo=timezone.utc)
+
+
+def test_get_release_reference_variable_returns_the_server_resolved_value(live):
+    resolved = live.task.releaseApi.getVariableValues(live.release_id)
+
+    assert "${relRefVar}" in resolved
+    assert live.task.getReleaseVariable("relRefVar") == resolved["${relRefVar}"]
+
+
+def test_get_release_variable_raises_for_an_unknown_name(live):
+    with pytest.raises(KeyError):
+        live.task.getReleaseVariable("doesNotExist")
+
+
+@pytest.mark.parametrize("key, value", [
+    ("relVarRw", "updated"),
+    ("relListVarRw", ["b", "a", "b"]),  # a list keeps its order and duplicates
+    ("relMapVarRw", {"env": "prod", "tier": "gold"}),
+])
+def test_set_release_variable_persists_the_value(live, key, value):
+    updated = live.task.setReleaseVariable(key, value)
+
+    assert updated.value == value
+    assert live.task.getReleaseVariable(key) == value
+
+
+def test_set_release_set_variable_persists_the_members(live):
+    members = ["Oranges", "Bananas", "Grapes"]
+
+    updated = live.task.setReleaseVariable("relSetVarRw", members)
+
+    assert set(updated.value) == set(members)
+    assert set(live.task.getReleaseVariable("relSetVarRw")) == set(members)
+
+
+@pytest.mark.parametrize("value", [
+    datetime(2027, 7, 8, 9, 10, 11, tzinfo=timezone.utc),
+    datetime.now(timezone.utc).replace(microsecond=0),
+], ids=["fixed", "now"])
+def test_set_release_date_variable_persists_the_instant(live, value):
+    updated = live.task.setReleaseVariable("relDateVarRw", value)
+
+    assert as_instant(updated.value) == value
+    assert as_instant(live.task.getReleaseVariable("relDateVarRw")) == value
+
+
+@pytest.mark.parametrize("value, vtype", [
+    ("created-value", "xlrelease.StringVariable"),
+    (["red", "green"], "xlrelease.SetStringVariable"),
+    ({"stage": "qa"}, "xlrelease.MapStringStringVariable"),
+], ids=["string", "set", "map"])
+def test_set_release_variable_creates_a_missing_variable(live, value, vtype):
+    key = f"relNew_{vtype.split('.')[1]}"
+
+    created = live.task.setReleaseVariable(key, value)
+
+    assert (created.key, created.type) == (key, vtype)
+    assert same_value(live.task.getReleaseVariable(key), value)
+
+
+# -- folder variables ------------------------------------------------------
+
+def test_get_folder_variable(live):
+    assert live.task.getFolderVariable("folder.folderVar") == "folder-value"
+
+
+def test_set_folder_variable_persists_the_value(live):
+    updated = live.task.setFolderVariable("folder.folderVarRw", "updated")
+
+    assert updated.value == "updated"
+    assert live.task.getFolderVariable("folder.folderVarRw") == "updated"
+
+
+@pytest.mark.parametrize("value, vtype", [
+    ("folder-created", "xlrelease.StringVariable"),
+    (["alpha", "beta"], "xlrelease.SetStringVariable"),
+    ({"team": "infra"}, "xlrelease.MapStringStringVariable"),
+], ids=["string", "set", "map"])
+def test_set_folder_variable_creates_a_missing_variable(live, value, vtype):
+    key = f"folder.new_{vtype.split('.')[1]}"
+
+    created = live.task.setFolderVariable(key, value)
+
+    assert (created.key, created.type) == (key, vtype)
+    assert same_value(live.task.getFolderVariable(key), value)
+
+
+# -- global variables ------------------------------------------------------
+
+def test_get_global_variable(live):
+    assert live.task.getGlobalVariable(live.global_read) == "global-value"
+
+
+def test_set_global_variable_persists_the_value(live):
+    updated = live.task.setGlobalVariable(live.global_rw, "updated")
+
+    assert updated.value == "updated"
+    assert live.task.getGlobalVariable(live.global_rw) == "updated"
+
+
+@pytest.mark.parametrize("value, vtype", [
+    ("global-created", "xlrelease.StringVariable"),
+    (["x", "y"], "xlrelease.SetStringVariable"),
+    ({"region": "ap"}, "xlrelease.MapStringStringVariable"),
+], ids=["string", "set", "map"])
+def test_set_global_variable_creates_a_missing_variable(live, value, vtype):
+    key = f"global.abtLiveNew_{vtype.split('.')[1]}_{live.uid}"
+
+    created = live.task.setGlobalVariable(key, value)
+    live.cleanup.global_variable_ids.append(created.id)
+
+    assert (created.key, created.type) == (key, vtype)
+    assert same_value(live.task.getGlobalVariable(key), value)
+
+
+# -- search by title -------------------------------------------------------
+
+def test_get_phases_by_title_searches_the_current_release(live):
+    phases = live.task.getPhasesByTitle(PHASE_TITLE)
+
+    assert phases and all(p.title == PHASE_TITLE for p in phases)
+
+
+@pytest.mark.parametrize("phase_title", [None, PHASE_TITLE], ids=["release-wide", "in-phase"])
+def test_get_tasks_by_title_finds_the_current_task(live, phase_title):
+    tasks = live.task.getTasksByTitle(TASK_TITLE, phase_title)
+
+    assert live.task_id in [t.id for t in tasks]
+
+
+def test_get_releases_by_title_finds_the_current_release(live):
+    releases = live.task.getReleasesByTitle(live.release_title)
+
+    assert live.release_id in [r.id for r in releases]
+

@@ -1,343 +1,354 @@
 """
-Concurrency-aware tests for the SIGABRT worker-thread abort model
-(docs/SPEC-abort-worker-thread.md).
+The SIGTERM/SIGABRT handler, called directly on the test's main thread.
 
-Most tests here exercise wrapper.py's internals directly, in-process, with
-os._exit() and update_output_context() mocked out so a simulated abort does
-not tear down the test runner itself or touch real files/secrets/callbacks.
-
-One test (`test_real_sigabrt_interrupts_blocking_task`) sends a genuine
-SIGABRT to a subprocess running the real wrapper end-to-end, mirroring how the
-release-runner aborts a task, to prove the full integration works.
+update_output_context() and os._exit() are replaced (see the ``reported`` and
+``exit_codes`` fixtures), so a simulated abort neither sends a result nor ends
+the test run. Real signals are covered by test_wrapper_e2e.py.
 """
-import json
-import os
 import signal
-import subprocess
 import sys
 import threading
 import time
-import unittest
 from unittest import mock
 
-import digitalai.release.integration.wrapper as wrapper
+import pytest
+
 from digitalai.release.integration.base_task import BaseTask
 from digitalai.release.integration.output_context import OutputContext
+from tests.support import NoOpTask
 
-THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+ABORTED = OutputContext(1, "Abort requested", {}, [])
 
 
-class _RecordingAbortTask(BaseTask):
-    """Stub task that counts abort() calls and lets tests set a canned output_context."""
-
+class CountingAbortTask(BaseTask):
     def __init__(self):
         super().__init__()
-        self.abort_call_count = 0
+        self.abort_calls = 0
 
-    def execute(self) -> None:  # pragma: no cover - not used directly
+    def execute(self) -> None:
         pass
 
     def abort(self) -> None:
-        self.abort_call_count += 1
+        self.abort_calls += 1
         super().abort()
 
 
-class WrapperAbortHandlerTests(unittest.TestCase):
-    """In-process tests for wrapper.abort_handler() and the single-writer flush guard."""
-
-    def setUp(self):
-        wrapper._reset_report_guard()
-        wrapper.dai_task_object = None
-
-    def tearDown(self):
-        wrapper._reset_report_guard()
-        wrapper.dai_task_object = None
-
-    def test_abort_handler_calls_abort_flushes_once_and_exits(self):
-        task = _RecordingAbortTask()
-        task.output_context = OutputContext(0, "", {}, [])
-        wrapper.dai_task_object = task
-
-        with mock.patch.object(wrapper, "update_output_context") as mock_update, \
-             mock.patch.object(wrapper.os, "_exit") as mock_exit:
-            wrapper.abort_handler(signal.SIGABRT, None)
-
-        self.assertEqual(task.abort_call_count, 1)
-        mock_update.assert_called_once()
-        (reported_ctx,), _ = mock_update.call_args
-        self.assertEqual(reported_ctx.exit_code, 1)
-        self.assertEqual(reported_ctx.job_error_message, "Abort requested")
-        mock_exit.assert_called_once_with(1)
-
-    def test_abort_handler_does_not_double_flush(self):
-        task = _RecordingAbortTask()
-        task.output_context = OutputContext(0, "", {}, [])
-        wrapper.dai_task_object = task
-
-        with mock.patch.object(wrapper, "update_output_context") as mock_update, \
-             mock.patch.object(wrapper.os, "_exit"):
-            # Simulate the worker's own normal-completion path reporting first.
-            self.assertTrue(wrapper._report_once())
-            # Then the abort handler fires; abort() cleanup still runs, but the
-            # flush must not happen a second time.
-            wrapper.abort_handler(signal.SIGABRT, None)
-
-        self.assertEqual(task.abort_call_count, 1)
-        mock_update.assert_called_once()
-
-    def test_abort_handler_with_no_task_object_exits_cleanly(self):
-        wrapper.dai_task_object = None
-
-        with mock.patch.object(wrapper, "update_output_context") as mock_update, \
-             mock.patch.object(wrapper.os, "_exit") as mock_exit:
-            wrapper.abort_handler(signal.SIGTERM, None)
-
-        mock_update.assert_called_once()
-        (reported_ctx,), _ = mock_update.call_args
-        self.assertEqual(reported_ctx.exit_code, 1)
-        mock_exit.assert_called_once_with(1)
-
-    def test_abort_handler_before_worker_starts_still_reports_abort_requested(self):
-        # Simulates SIGABRT arriving right after dai_task_object is assigned,
-        # before the worker thread has had a chance to run execute_task()'s
-        # body -- i.e. before output_context was ever touched post-construction.
-        task = _RecordingAbortTask()
-        wrapper.dai_task_object = task
-
-        with mock.patch.object(wrapper, "update_output_context") as mock_update, \
-             mock.patch.object(wrapper.os, "_exit") as mock_exit:
-            wrapper.abort_handler(signal.SIGABRT, None)
-
-        self.assertEqual(task.abort_call_count, 1)
-        mock_update.assert_called_once()
-        (reported_ctx,), _ = mock_update.call_args
-        self.assertEqual(reported_ctx.exit_code, 1)
-        self.assertEqual(reported_ctx.job_error_message, "Abort requested")
-        mock_exit.assert_called_once_with(1)
-
-    def test_abort_handler_logs_actual_signal_name(self):
-        task = _RecordingAbortTask()
-        task.output_context = OutputContext(0, "", {}, [])
-        wrapper.dai_task_object = task
-
-        with mock.patch.object(wrapper, "update_output_context"), \
-             mock.patch.object(wrapper.os, "_exit"), \
-             mock.patch.object(wrapper.dai_logger, "info") as mock_log_info:
-            wrapper.abort_handler(signal.SIGABRT, None)
-
-        logged_messages = [call.args[0] for call in mock_log_info.call_args_list]
-        self.assertTrue(any("SIGABRT" in msg for msg in logged_messages))
+def start_worker(wrapper, task):
+    """Runs task.execute_task() on a worker thread registered with the wrapper, as execute_task() does."""
+    wrapper.dai_task_object = task
+    worker = threading.Thread(target=task.execute_task, daemon=True)
+    wrapper._worker = worker
+    worker.start()
+    return worker
 
 
-class _CooperativeTask(BaseTask):
-    """Task whose execute() polls is_abort_requested() and stops promptly, reporting
-    a distinct, custom result so tests can tell it stopped cooperatively rather
-    than being torn down by the abort handler."""
+@pytest.mark.parametrize("signum", [signal.SIGABRT, signal.SIGTERM], ids=["SIGABRT", "SIGTERM"])
+def test_abort_calls_abort_reports_once_and_exits_1(isolated_wrapper, reported, exit_codes, signum):
+    task = CountingAbortTask()
+    isolated_wrapper.dai_task_object = task
 
-    def execute(self) -> None:
-        while not self.is_abort_requested():
-            time.sleep(0.02)
-        self.set_output_property("stopped_cooperatively", True)
-        self.set_error_message("Stopped cooperatively")
+    isolated_wrapper.abort_handler(signum, None)
 
-
-class WrapperExecuteTaskThreadingTests(unittest.TestCase):
-    """In-process tests for wrapper.execute_task()'s worker-thread + guard behavior."""
-
-    def setUp(self):
-        wrapper._reset_report_guard()
-        wrapper.dai_task_object = None
-
-    def tearDown(self):
-        wrapper._reset_report_guard()
-        wrapper.dai_task_object = None
-
-    def test_execute_task_normal_completion_reports_once(self):
-        class _FastTask(BaseTask):
-            def execute(self) -> None:
-                self.set_output_property("greeting", "Hello World")
-
-        task = _FastTask()
-
-        with mock.patch.object(wrapper, "update_output_context") as mock_update:
-            wrapper.execute_task(task)
-
-        mock_update.assert_called_once()
-        (reported_ctx,), _ = mock_update.call_args
-        self.assertEqual(reported_ctx.exit_code, 0)
-        self.assertEqual(reported_ctx.output_properties, {"greeting": "Hello World"})
-
-    def test_cooperative_task_stops_promptly_when_abort_requested(self):
-        task = _CooperativeTask()
-
-        def _request_abort_shortly():
-            time.sleep(0.1)
-            task._request_abort()
-
-        threading.Thread(target=_request_abort_shortly, daemon=True).start()
-
-        with mock.patch.object(wrapper, "update_output_context") as mock_update:
-            start = time.monotonic()
-            wrapper.execute_task(task)
-            elapsed = time.monotonic() - start
-
-        # The worker should notice is_abort_requested() and return well within
-        # a couple of poll intervals, without needing a real signal.
-        self.assertLess(elapsed, 2.0)
-        mock_update.assert_called_once()
-        (reported_ctx,), _ = mock_update.call_args
-        self.assertEqual(reported_ctx.job_error_message, "Stopped cooperatively")
-        self.assertTrue(reported_ctx.output_properties.get("stopped_cooperatively"))
-
-    def test_execute_task_resets_guard_across_daemon_iterations(self):
-        class _FastTask(BaseTask):
-            def execute(self) -> None:
-                pass
-
-        task1 = _FastTask()
-        task2 = _FastTask()
-
-        with mock.patch.object(wrapper, "update_output_context") as mock_update:
-            wrapper.execute_task(task1)
-            wrapper.execute_task(task2)
-
-        # Each iteration must flush its own task's result; the guard from the
-        # first iteration must not suppress the second.
-        self.assertEqual(mock_update.call_count, 2)
-        self.assertIs(wrapper.dai_task_object, task2)
-
-    def test_abort_exception_propagates_exit_status_after_reporting(self):
-        from digitalai.release.integration.exceptions import AbortException
-
-        class _AbortingTask(BaseTask):
-            def execute(self) -> None:
-                raise AbortException()
-
-        task = _AbortingTask()
-
-        with mock.patch.object(wrapper, "update_output_context") as mock_update:
-            with self.assertRaises(SystemExit) as ctx:
-                wrapper.execute_task(task)
-
-        # BaseTask.execute_task() sets exit_code=1/"Abort requested" then
-        # sys.exit(1); the status must be propagated on the main thread.
-        self.assertEqual(ctx.exception.code, 1)
-        mock_update.assert_called_once()
-        (reported_ctx,), _ = mock_update.call_args
-        self.assertEqual(reported_ctx.exit_code, 1)
-        self.assertEqual(reported_ctx.job_error_message, "Abort requested")
-
-    def test_direct_sys_exit_propagates_status_and_reports_context_as_is(self):
-        class _ExitingTask(BaseTask):
-            def execute(self) -> None:
-                sys.exit(2)
-
-        task = _ExitingTask()
-
-        with mock.patch.object(wrapper, "update_output_context") as mock_update:
-            with self.assertRaises(SystemExit) as ctx:
-                wrapper.execute_task(task)
-
-        # The exact SystemExit code must be preserved.
-        self.assertEqual(ctx.exception.code, 2)
-        # Strict master parity: the output context is reported as-is (default
-        # success), not reconciled to the SystemExit code.
-        mock_update.assert_called_once()
-        (reported_ctx,), _ = mock_update.call_args
-        self.assertEqual(reported_ctx.exit_code, 0)
-
-    def test_normal_completion_does_not_raise_system_exit(self):
-        class _FastTask(BaseTask):
-            def execute(self) -> None:
-                self.set_output_property("ok", True)
-
-        task = _FastTask()
-
-        with mock.patch.object(wrapper, "update_output_context") as mock_update:
-            # Must return normally, not raise SystemExit.
-            wrapper.execute_task(task)
-
-        mock_update.assert_called_once()
+    assert task.abort_calls == 1
+    assert reported == [ABORTED]
+    assert exit_codes == [1]
 
 
-class WrapperRealSigabrtEndToEndTest(unittest.TestCase):
-    """
-    Full end-to-end test: runs the real wrapper module as a subprocess against a
-    task that blocks in execute() without polling is_abort_requested(), sends it
-    a genuine SIGABRT partway through, and asserts it reports an aborted result
-    promptly instead of waiting for the 30s sleep to finish.
-    """
+def test_abort_requests_a_cooperative_stop(isolated_wrapper, reported, exit_codes):
+    task = NoOpTask()
+    isolated_wrapper.dai_task_object = task
 
-    def setUp(self):
-        self.input_path = os.path.join(THIS_DIR, "blocking_input.json")
-        self.output_path = os.path.join(THIS_DIR, "blocking_output.json")
-        if os.path.exists(self.output_path):
-            os.remove(self.output_path)
+    isolated_wrapper.abort_handler(signal.SIGABRT, None)
 
-    def tearDown(self):
-        for path in (self.input_path, self.output_path):
-            if os.path.exists(path):
-                os.remove(path)
-
-    def test_real_sigabrt_interrupts_blocking_task(self):
-        input_context = {
-            "release": {
-                "id": "Applications/Folder1f65c7220b394afbb941154342fd9fc6/Release31de09e95c8e4ebb95aaed29a8082d0b",
-                "automatedTaskAsUser": {"username": "admin", "password": "admin"},
-            },
-            "task": {
-                "id": "Applications/Folder1f65c7220b394afbb941154342fd9fc6/Release31de09e95c8e4ebb95aaed29a8082d0b/Phase723a601c78804f7dbcaa8b05b83708f5/Task3a35b67b42b6428b854857fba470b39a",
-                "type": "containerExamples.BlockingTask",
-                "properties": [
-                    {"name": "capabilities", "value": ["remote"], "kind": "SET_OF_STRING", "category": "input", "password": False},
-                ],
-            },
-        }
-        with open(self.input_path, "w") as f:
-            json.dump(input_context, f)
-
-        env = dict(os.environ)
-        env["INPUT_LOCATION"] = "blocking_input.json"
-        env["OUTPUT_LOCATION"] = "blocking_output.json"
-        env["RELEASE_URL"] = "http://localhost:5516"
-
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "digitalai.release.integration.wrapper"],
-            cwd=THIS_DIR,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        try:
-            # Give the task time to enter its blocking sleep(30) call.
-            time.sleep(1.0)
-            start = time.monotonic()
-            proc.send_signal(signal.SIGABRT)
-            stdout, stderr = proc.communicate(timeout=10)
-            elapsed = time.monotonic() - start
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            stdout, stderr = proc.communicate()
-            self.fail(
-                f"wrapper did not exit promptly after SIGABRT\nstdout:\n{stdout}\nstderr:\n{stderr}"
-            )
-
-        self.assertEqual(
-            proc.returncode, 1,
-            msg=f"wrapper exited with {proc.returncode}\nstdout:\n{stdout}\nstderr:\n{stderr}",
-        )
-        # Must be well under the task's 30s sleep -- proves the abort was
-        # timely rather than relying on the runner's Phase-2 force-kill.
-        self.assertLess(elapsed, 10.0)
-
-        self.assertTrue(os.path.exists(self.output_path), "wrapper did not produce blocking_output.json")
-        with open(self.output_path) as f:
-            actual_output = json.load(f)
-
-        self.assertEqual(actual_output["exitCode"], 1)
-        self.assertEqual(actual_output["jobErrorMessage"], "Abort requested")
+    assert task.is_abort_requested()
 
 
-if __name__ == '__main__':
-    unittest.main()
+def test_abort_logs_the_received_signal(isolated_wrapper, reported, exit_codes, dai_log):
+    isolated_wrapper.dai_task_object = NoOpTask()
+
+    isolated_wrapper.abort_handler(signal.SIGTERM, None)
+
+    assert "Received SIGTERM to gracefully stop the process" in dai_log.messages
+
+
+def test_abort_before_a_task_exists_reports_a_clear_message(isolated_wrapper, reported, exit_codes):
+    isolated_wrapper.abort_handler(signal.SIGTERM, None)
+
+    assert reported == [OutputContext(1, "Abort requested before the task started", {}, [])]
+    assert exit_codes == [1]
+
+
+def test_abort_after_the_result_was_reported_does_not_report_again(isolated_wrapper, reported, exit_codes):
+    task = CountingAbortTask()
+    isolated_wrapper.dai_task_object = task
+    assert isolated_wrapper._report_once()
+
+    isolated_wrapper.abort_handler(signal.SIGABRT, None)
+
+    assert task.abort_calls == 1
+    assert reported == [OutputContext(0, "", {}, [])]
+    assert exit_codes == [1]
+
+
+def test_cooperative_task_is_reported_with_what_it_recorded_while_stopping(isolated_wrapper, reported, exit_codes):
+    class PollingTask(BaseTask):
+        def execute(self) -> None:
+            deadline = time.monotonic() + 5
+            while not self.is_abort_requested() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.set_output_property("processed", 3)
+            self.add_reporting_record({"status": "ABORTED"})
+
+    worker = start_worker(isolated_wrapper, PollingTask())
+
+    isolated_wrapper.abort_handler(signal.SIGABRT, None)
+
+    assert not worker.is_alive()
+    assert reported == [OutputContext(1, "Abort requested", {"processed": 3}, [{"status": "ABORTED"}])]
+    assert exit_codes == [1]
+
+
+def test_task_that_ignores_the_abort_is_reported_after_the_grace_period(isolated_wrapper, reported, exit_codes,
+                                                                         monkeypatch):
+    monkeypatch.setattr(isolated_wrapper, "ABORT_GRACE_PERIOD_SECONDS", 0.2)
+    unblock = threading.Event()
+
+    class StuckTask(BaseTask):
+        def execute(self) -> None:
+            unblock.wait(10)
+
+    worker = start_worker(isolated_wrapper, StuckTask())
+    try:
+        start = time.monotonic()
+        isolated_wrapper.abort_handler(signal.SIGABRT, None)
+        elapsed = time.monotonic() - start
+
+        assert worker.is_alive()
+    finally:
+        unblock.set()
+
+    assert 0.2 <= elapsed < 5
+    assert reported == [ABORTED]
+    assert exit_codes == [1]
+
+
+def test_reported_result_is_a_snapshot_of_the_output_context(isolated_wrapper, reported, exit_codes):
+    task = CountingAbortTask()
+    task.set_output_property("a", 1)
+    task.add_reporting_record({"r": 1})
+    isolated_wrapper.dai_task_object = task
+
+    isolated_wrapper.abort_handler(signal.SIGABRT, None)
+
+    (snapshot,) = reported
+    assert snapshot is not task.get_output_context()
+    assert snapshot.output_properties is not task.get_output_properties()
+    assert snapshot.reporting_records is not task.get_output_context().reporting_records
+    assert snapshot == OutputContext(1, "Abort requested", {"a": 1}, [{"r": 1}])
+
+
+def test_reported_result_shares_no_nested_object_with_the_task(isolated_wrapper, reported, exit_codes):
+    task = CountingAbortTask()
+    task.set_output_property("progress", {"done": 1})
+    task.add_reporting_record({"items": [1]})
+    isolated_wrapper.dai_task_object = task
+
+    isolated_wrapper.abort_handler(signal.SIGABRT, None)
+
+    (snapshot,) = reported
+    assert snapshot.output_properties["progress"] is not task.get_output_properties()["progress"]
+    assert snapshot.reporting_records[0] is not task.get_output_context().reporting_records[0]
+    assert snapshot == OutputContext(1, "Abort requested", {"progress": {"done": 1}}, [{"items": [1]}])
+
+
+class ChangingDict(dict):
+    """A nested output the worker changes while it is read: reading it fails ``failures`` times."""
+
+    def __init__(self, failures, **items):
+        super().__init__(**items)
+        self.failures = failures
+
+    def items(self):
+        if self.failures:
+            self.failures -= 1
+            raise RuntimeError("dictionary changed size during iteration")
+        return super().items()
+
+
+def test_output_changed_while_read_is_read_again(isolated_wrapper, reported, exit_codes):
+    task = CountingAbortTask()
+    task.set_output_property("progress", ChangingDict(failures=2, done=1))
+    isolated_wrapper.dai_task_object = task
+
+    isolated_wrapper.abort_handler(signal.SIGABRT, None)
+
+    assert reported == [OutputContext(1, "Abort requested", {"progress": {"done": 1}}, [])]
+    assert exit_codes == [1]
+
+
+def test_output_that_keeps_changing_is_left_out_of_the_aborted_result(isolated_wrapper, reported, exit_codes,
+                                                                     dai_log):
+    task = CountingAbortTask()
+    task.set_output_property("progress", ChangingDict(failures=1000, done=1))
+    task.add_reporting_record({"r": 1})
+    isolated_wrapper.dai_task_object = task
+
+    isolated_wrapper.abort_handler(signal.SIGABRT, None)
+
+    assert reported == [ABORTED]
+    assert exit_codes == [1]
+    assert any("without the task's outputs" in message for message in dai_log.messages)
+
+
+def test_abort_exits_even_when_reporting_fails(isolated_wrapper, exit_codes, monkeypatch):
+    monkeypatch.setattr(isolated_wrapper, "update_output_context", mock.Mock(side_effect=RuntimeError("push failed")))
+    isolated_wrapper.dai_task_object = NoOpTask()
+
+    with pytest.raises(RuntimeError, match="push failed"):
+        isolated_wrapper.abort_handler(signal.SIGABRT, None)
+
+    assert exit_codes == [1]
+
+
+class RecordingStream:
+    """Stands in for sys.stdout/sys.stderr; flush() blocks until ``unblock`` is set, if given."""
+
+    def __init__(self, unblock=None):
+        self.unblock = unblock
+        self.flushed = False
+
+    def write(self, text):
+        return len(text)
+
+    def flush(self):
+        if self.unblock is not None:
+            self.unblock.wait(10)
+        self.flushed = True
+
+
+def test_exit_flushes_stdout_and_stderr_first(isolated_wrapper, exit_codes, monkeypatch):
+    stdout, stderr = RecordingStream(), RecordingStream()
+    monkeypatch.setattr(sys, "stdout", stdout)
+    monkeypatch.setattr(sys, "stderr", stderr)
+
+    isolated_wrapper._exit_process(1)
+
+    assert stdout.flushed and stderr.flushed
+    assert exit_codes == [1]
+
+
+def test_exit_does_not_wait_for_a_blocked_stream(isolated_wrapper, exit_codes, monkeypatch):
+    monkeypatch.setattr(isolated_wrapper, "FLUSH_TIMEOUT_SECONDS", 0.2)
+    unblock = threading.Event()
+    monkeypatch.setattr(sys, "stderr", RecordingStream(unblock))
+    try:
+        start = time.monotonic()
+        isolated_wrapper._exit_process(1)
+        elapsed = time.monotonic() - start
+    finally:
+        unblock.set()
+
+    assert exit_codes == [1]
+    assert elapsed < 5
+
+
+def test_abort_override_that_sets_no_exit_code_is_still_reported_as_failed(isolated_wrapper, reported, exit_codes):
+    class QuietAbortTask(BaseTask):
+        def execute(self) -> None:
+            pass
+
+        def abort(self) -> None:
+            self.set_output_property("cleanedUp", True)
+
+    isolated_wrapper.dai_task_object = QuietAbortTask()
+
+    isolated_wrapper.abort_handler(signal.SIGABRT, None)
+
+    assert reported == [OutputContext(1, "Abort requested", {"cleanedUp": True}, [])]
+
+
+def test_abort_override_keeps_its_own_error_message(isolated_wrapper, reported, exit_codes):
+    class CustomAbortTask(BaseTask):
+        def execute(self) -> None:
+            pass
+
+        def abort(self) -> None:
+            self.set_error_message("Cancelled by operator")
+
+    isolated_wrapper.dai_task_object = CustomAbortTask()
+
+    isolated_wrapper.abort_handler(signal.SIGABRT, None)
+
+    assert reported == [OutputContext(1, "Cancelled by operator", {}, [])]
+
+
+@pytest.mark.parametrize("error", [SystemExit(3), RuntimeError("cleanup failed")], ids=["sys-exit", "exception"])
+def test_abort_override_that_raises_still_reports_and_exits_1(isolated_wrapper, reported, exit_codes, error):
+    class RaisingAbortTask(BaseTask):
+        def execute(self) -> None:
+            pass
+
+        def abort(self) -> None:
+            raise error
+
+    isolated_wrapper.dai_task_object = RaisingAbortTask()
+
+    isolated_wrapper.abort_handler(signal.SIGABRT, None)
+
+    assert reported == [ABORTED]
+    assert exit_codes == [1]
+
+
+def test_signal_during_a_report_lets_the_report_finish_then_exits(isolated_wrapper, exit_codes, monkeypatch):
+    pushed = []
+
+    def push_interrupted_by_a_signal(context):
+        # Python runs signal handlers on the main thread, possibly mid-push.
+        isolated_wrapper.abort_handler(signal.SIGABRT, None)
+        pushed.append(context)
+
+    monkeypatch.setattr(isolated_wrapper, "update_output_context", push_interrupted_by_a_signal)
+
+    isolated_wrapper.execute_task(NoOpTask())
+
+    assert pushed == [OutputContext(0, "", {}, [])]
+    assert exit_codes == [1]
+
+
+def test_second_signal_during_an_abort_is_ignored(isolated_wrapper, reported, exit_codes):
+    class ReentrantAbortTask(BaseTask):
+        def execute(self) -> None:
+            pass
+
+        def abort(self) -> None:
+            isolated_wrapper.abort_handler(signal.SIGTERM, None)
+            super().abort()
+
+    isolated_wrapper.dai_task_object = ReentrantAbortTask()
+
+    isolated_wrapper.abort_handler(signal.SIGABRT, None)
+
+    assert reported == [ABORTED]
+    assert exit_codes == [1]
+
+
+def test_task_without_super_init_can_be_aborted(isolated_wrapper, reported, exit_codes):
+    class NoSuperInitTask(BaseTask):
+        def __init__(self):
+            pass
+
+        def execute(self) -> None:
+            pass
+
+    task = NoSuperInitTask()
+    isolated_wrapper.dai_task_object = task
+
+    isolated_wrapper.abort_handler(signal.SIGABRT, None)
+
+    assert task.is_abort_requested()
+    assert reported == [ABORTED]
+
+
+def test_handlers_are_installed_for_sigterm_and_sigabrt(isolated_wrapper):
+    assert signal.getsignal(signal.SIGTERM) is isolated_wrapper.abort_handler
+    assert signal.getsignal(signal.SIGABRT) is isolated_wrapper.abort_handler

@@ -556,8 +556,9 @@ class ApiBaseTask(BaseTask):
         The accepted Python types mirror :meth:`_variable_type_for_value`.
         ``vtype`` is matched by suffix so subtypes are treated as their base
         kind (e.g. ``PasswordStringVariable`` is a string). More specific
-        suffixes are tested first because ``SetStringVariable`` and
-        ``MapStringStringVariable`` also end in ``StringVariable``. A type the
+        suffixes are tested first because ``ListStringVariable``,
+        ``SetStringVariable`` and ``MapStringStringVariable`` also end in
+        ``StringVariable``. A type the
         SDK does not recognise returns ``True`` -- it is left for the server to
         validate rather than blocked here.
         """
@@ -571,7 +572,7 @@ class ApiBaseTask(BaseTask):
             return isinstance(value, (date, str))
         if vtype.endswith("MapStringStringVariable"):
             return isinstance(value, dict)
-        if vtype.endswith("SetStringVariable"):
+        if vtype.endswith(("ListStringVariable", "SetStringVariable")):
             return isinstance(value, (list, set, tuple))
         if vtype.endswith("StringVariable"):
             return isinstance(value, str)
