@@ -38,6 +38,8 @@ def isolated_wrapper(monkeypatch):
     """The wrapper module with blank settings and fresh per-execution state."""
     for name in _WRAPPER_SETTINGS:
         monkeypatch.setattr(wrapper, name, "")
+    # Also read from the environment; 0 would skip waiting for the worker. Tests may override it.
+    monkeypatch.setattr(wrapper, "ABORT_GRACE_PERIOD_SECONDS", 3.0)
     monkeypatch.setattr(wrapper, "input_context", None)
     monkeypatch.setattr(wrapper, "dai_task_object", None)
     monkeypatch.setattr(wrapper.masked_std_out, "secrets", [])

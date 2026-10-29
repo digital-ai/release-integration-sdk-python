@@ -92,13 +92,16 @@ def cluster(tmp_path_factory):
         pytest.skip(f"Kubernetes context {CONTEXT!r} is not reachable: {exc}")
 
     namespace = unique("sdk-live")
-    core.create_namespace(client.V1Namespace(metadata=client.V1ObjectMeta(name=namespace)))
-    kubeconfig = tmp_path_factory.mktemp("kube") / "config"
-    write_single_context_kubeconfig(source, CONTEXT, kubeconfig)
     try:
-        yield SimpleNamespace(core=core, namespace=namespace, kubeconfig=kubeconfig)
+        core.create_namespace(client.V1Namespace(metadata=client.V1ObjectMeta(name=namespace)))
+        try:
+            # Inside the try, so a failure here still deletes the namespace.
+            kubeconfig = tmp_path_factory.mktemp("kube") / "config"
+            write_single_context_kubeconfig(source, CONTEXT, kubeconfig)
+            yield SimpleNamespace(core=core, namespace=namespace, kubeconfig=kubeconfig)
+        finally:
+            core.delete_namespace(namespace)
     finally:
-        core.delete_namespace(namespace)
         api_client.close()
 
 
