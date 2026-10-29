@@ -3,5 +3,5 @@ from .api_base_task import ApiBaseTask
 from .input_context import InputContext
 from .output_context import OutputContext
 from .exceptions import AbortException
-from .reporting_records import BuildRecord, PlanRecord, ItsmRecord,CodeComplianceRecord, DeploymentRecord
+from .reporting_records import BuildRecord, PlanRecord, ItsmRecord, CodeComplianceRecord, DeploymentRecord, AiUsageRecord
 from .logger import dai_logger
