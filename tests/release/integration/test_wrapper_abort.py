@@ -6,6 +6,7 @@ update_output_context() and os._exit() are replaced (see the ``reported`` and
 the test run. Real signals are covered by test_wrapper_e2e.py.
 """
 import signal
+import sys
 import threading
 import time
 from unittest import mock
@@ -207,6 +208,48 @@ def test_abort_exits_even_when_reporting_fails(isolated_wrapper, exit_codes, mon
         isolated_wrapper.abort_handler(signal.SIGABRT, None)
 
     assert exit_codes == [1]
+
+
+class RecordingStream:
+    """Stands in for sys.stdout/sys.stderr; flush() blocks until ``unblock`` is set, if given."""
+
+    def __init__(self, unblock=None):
+        self.unblock = unblock
+        self.flushed = False
+
+    def write(self, text):
+        return len(text)
+
+    def flush(self):
+        if self.unblock is not None:
+            self.unblock.wait(10)
+        self.flushed = True
+
+
+def test_exit_flushes_stdout_and_stderr_first(isolated_wrapper, exit_codes, monkeypatch):
+    stdout, stderr = RecordingStream(), RecordingStream()
+    monkeypatch.setattr(sys, "stdout", stdout)
+    monkeypatch.setattr(sys, "stderr", stderr)
+
+    isolated_wrapper._exit_process(1)
+
+    assert stdout.flushed and stderr.flushed
+    assert exit_codes == [1]
+
+
+def test_exit_does_not_wait_for_a_blocked_stream(isolated_wrapper, exit_codes, monkeypatch):
+    monkeypatch.setattr(isolated_wrapper, "FLUSH_TIMEOUT_SECONDS", 0.2)
+    unblock = threading.Event()
+    monkeypatch.setattr(sys, "stderr", RecordingStream(unblock))
+    try:
+        start = time.monotonic()
+        isolated_wrapper._exit_process(1)
+        elapsed = time.monotonic() - start
+    finally:
+        unblock.set()
+
+    assert exit_codes == [1]
+    assert elapsed < 5
 
 
 def test_abort_override_that_sets_no_exit_code_is_still_reported_as_failed(isolated_wrapper, reported, exit_codes):

@@ -108,10 +108,8 @@ def test_logged_secrets_are_masked(secret_task_stdout, channel):
 GRACE_PERIOD = 2.0
 
 
-def run_and_abort(workspace, task_type):
-    """Runs task_type, sends SIGABRT once execute() has started; returns (seconds to exit, output)."""
-    process = start_wrapper(workspace, input_context(task_type, []),
-                            ABORT_GRACE_PERIOD_SECONDS=str(GRACE_PERIOD))
+def wait_until_started(workspace, process):
+    """Waits for the fixture task's ``task_started`` file, failing if the wrapper exits or 30s pass."""
     marker = workspace / "task_started"
     deadline = time.monotonic() + 30
     while not marker.exists():
@@ -119,6 +117,13 @@ def run_and_abort(workspace, task_type):
             _, stdout, stderr = finish(process)
             pytest.fail(f"task did not start\nstdout:\n{stdout}\nstderr:\n{stderr}")
         time.sleep(0.05)
+
+
+def run_and_abort(workspace, task_type):
+    """Runs task_type, sends SIGABRT once execute() has started; returns (seconds to exit, output)."""
+    process = start_wrapper(workspace, input_context(task_type, []),
+                            ABORT_GRACE_PERIOD_SECONDS=str(GRACE_PERIOD))
+    wait_until_started(workspace, process)
 
     start = time.monotonic()
     process.send_signal(signal.SIGABRT)
@@ -147,3 +152,35 @@ def test_sigabrt_reports_what_a_cooperative_task_recorded_while_stopping(task_wo
     assert output["outputProperties"] == {"stoppedCooperatively": True}
     (record,) = output["reportingRecords"]
     assert record["processed"] > 0
+
+
+@posix_only
+def test_sigabrt_exits_while_the_task_is_blocked_writing_to_stderr(task_workspace):
+    (task_workspace / "input.json").write_text(json.dumps(input_context("containerExamples.StderrFloodTask", [])))
+    env = wrapper_env(ABORT_GRACE_PERIOD_SECONDS=str(GRACE_PERIOD))
+    del env["PYTHONUNBUFFERED"]  # buffered streams have the lock a blocked write holds
+    read_end, write_end = os.pipe()  # stderr goes here and is never read, so it fills up
+    try:
+        with open(task_workspace / "stdout.log", "w") as stdout:
+            process = subprocess.Popen([sys.executable, "-m", "digitalai.release.integration.wrapper"],
+                                       cwd=task_workspace, env=env, stdout=stdout, stderr=write_end)
+        os.close(write_end)
+        wait_until_started(task_workspace, process)
+        time.sleep(1)  # the pipe fills within milliseconds; then the task's write blocks
+
+        start = time.monotonic()
+        process.send_signal(signal.SIGABRT)
+        try:
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            pytest.fail("wrapper did not exit after SIGABRT while the task was blocked writing to stderr")
+        elapsed = time.monotonic() - start
+    finally:
+        os.close(read_end)
+
+    assert process.returncode == 1
+    assert elapsed < GRACE_PERIOD + 5
+    assert read_output(task_workspace) == {"exitCode": 1, "jobErrorMessage": "Abort requested",
+                                           "outputProperties": {}, "reportingRecords": []}

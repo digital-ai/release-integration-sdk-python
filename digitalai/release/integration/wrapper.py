@@ -157,13 +157,29 @@ def _snapshot_output_context(task: Optional[BaseTask], no_task_message: str) -> 
     )
 
 
+# How long _flush_std_streams() waits for stdout/stderr to flush before exiting.
+FLUSH_TIMEOUT_SECONDS = 1.0
+
+
 def _flush_std_streams() -> None:
-    """Flushes stdout/stderr before os._exit(), which skips Python's own flush."""
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.flush()
-        except Exception:
-            pass
+    """
+    Flushes stdout/stderr before os._exit(), which skips Python's own flush.
+
+    Waits at most FLUSH_TIMEOUT_SECONDS. A task still writing to a full pipe
+    that nobody reads holds that stream's lock, so an unbounded flush would
+    keep the process from exiting. Nothing is logged on a timeout, since the
+    logger writes to stdout, which may be the blocked stream.
+    """
+    def flush():
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.flush()
+            except Exception:
+                pass
+
+    flusher = threading.Thread(target=flush, name="dai-flush", daemon=True)
+    flusher.start()
+    flusher.join(timeout=FLUSH_TIMEOUT_SECONDS)
 
 
 def _exit_process(code: int) -> None:

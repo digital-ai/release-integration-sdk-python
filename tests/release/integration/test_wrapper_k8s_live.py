@@ -53,7 +53,9 @@ def kubeconfig_path() -> str:
 
 def write_single_context_kubeconfig(source: str, context: str, target) -> None:
     """
-    Copies just ``context`` (with its cluster and user) into a kubeconfig of its own.
+    Copies just ``context`` (with its cluster and user, if it has one) into a
+    kubeconfig of its own. A context may have no user, e.g. for a local
+    ``kubectl proxy``, which needs no credentials.
 
     Relative certificate, key and token file paths resolve against the
     kubeconfig's own directory, so they are made absolute for the copy.
@@ -62,15 +64,17 @@ def write_single_context_kubeconfig(source: str, context: str, target) -> None:
         full = yaml.safe_load(f)
     ctx = next(c for c in full["contexts"] if c["name"] == context)
     cluster = next(c for c in full["clusters"] if c["name"] == ctx["context"]["cluster"])
-    user = next(u for u in full["users"] if u["name"] == ctx["context"]["user"])
+    user_name = ctx["context"].get("user")
+    users = [u for u in full.get("users") or [] if user_name and u["name"] == user_name]
     source_dir = os.path.dirname(os.path.abspath(source))
-    for entry, keys in ((cluster["cluster"], ("certificate-authority",)),
-                        (user["user"], ("client-certificate", "client-key", "tokenFile"))):
+    path_fields = [(cluster["cluster"], ("certificate-authority",))]
+    path_fields += [(u.get("user") or {}, ("client-certificate", "client-key", "tokenFile")) for u in users]
+    for entry, keys in path_fields:
         for key in keys:
             if entry.get(key):
                 entry[key] = os.path.join(source_dir, os.path.expanduser(entry[key]))
     target.write_text(yaml.safe_dump({"apiVersion": "v1", "kind": "Config", "current-context": context,
-                                      "contexts": [ctx], "clusters": [cluster], "users": [user]}))
+                                      "contexts": [ctx], "clusters": [cluster], "users": users}))
 
 
 @pytest.fixture(scope="module")
