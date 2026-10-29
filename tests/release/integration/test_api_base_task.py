@@ -354,6 +354,16 @@ def test_folder_and_global_helpers_require_the_scope_prefix(task, apis, helper, 
     apis.configuration.getGlobalVariables.assert_not_called()
 
 
+def test_set_release_variable_updates_a_list_variable_with_a_list(task, apis):
+    existing = variable("trackedItems", [RELEASE_ID], "xlrelease.ListStringVariable")
+    stored(apis, SCOPES["release"], existing)
+
+    task.setReleaseVariable("trackedItems", [RELEASE_ID, "Applications/Release2"])
+
+    apis.release.updateVariable.assert_called_once_with(existing.id, existing)
+    assert existing.value == [RELEASE_ID, "Applications/Release2"]
+
+
 def test_set_release_variable_sends_a_datetime_as_iso_8601(task, apis):
     existing = variable("when", None, "xlrelease.DateVariable")
     stored(apis, SCOPES["release"], existing)
@@ -388,6 +398,8 @@ def test_new_variable_type_is_inferred_from_the_value(value, expected):
     ("xlrelease.DateVariable", "2026-01-01T00:00:00Z"),
     ("xlrelease.MapStringStringVariable", {"k": "v"}),
     ("xlrelease.SetStringVariable", ("a",)),
+    ("xlrelease.ListStringVariable", ["a", "a"]),
+    ("xlrelease.ListStringVariable", ("a",)),
     ("xlrelease.StringVariable", "text"),
     ("xlrelease.PasswordStringVariable", "secret"),
     ("custom.UnknownVariable", object()),
@@ -403,6 +415,7 @@ def test_value_matching_the_variable_type_is_accepted(vtype, value):
     ("xlrelease.DateVariable", 12345),
     ("xlrelease.MapStringStringVariable", [("k", "v")]),
     ("xlrelease.SetStringVariable", "a"),
+    ("xlrelease.ListStringVariable", "a"),
     ("xlrelease.StringVariable", 42),
     ("xlrelease.PasswordStringVariable", None),
 ])

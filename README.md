@@ -88,6 +88,7 @@ class ShowVersion(ApiBaseTask):
 - A signal received while the task result is being reported no longer cuts off the report; repeat signals during an abort are ignored.
 - An aborted result is never reported with exit code 0, and a task calling `sys.exit(n)` is reported with exit code `n`.
 - Tasks whose `__init__` does not call `super().__init__()` work again.
+- `setReleaseVariable()`, `setFolderVariable()` and `setGlobalVariable()` accept a list for an existing list variable (`xlrelease.ListStringVariable`); it was rejected with a `TypeError` as if the variable held a string.
 
 ### Version 26.3.1
 

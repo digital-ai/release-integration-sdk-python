@@ -87,11 +87,13 @@ def new_variable(vtype, key, value=None, **extra):
 RELEASE_VARIABLES = {
     "relVar": ("xlrelease.StringVariable", "release-value"),
     "relSetVar": ("xlrelease.SetStringVariable", ["Apples", "Pears"]),
+    "relListVar": ("xlrelease.ListStringVariable", ["second", "first"]),
     "relMapVar": ("xlrelease.MapStringStringVariable", {"env": "dev", "region": "us"}),
     "relDateVar": ("xlrelease.DateVariable", "2026-01-02T03:04:05+00:00"),
     # Written by the setter tests; never read by the getter tests.
     "relVarRw": ("xlrelease.StringVariable", "initial"),
     "relSetVarRw": ("xlrelease.SetStringVariable", ["initial"]),
+    "relListVarRw": ("xlrelease.ListStringVariable", ["initial"]),
     "relMapVarRw": ("xlrelease.MapStringStringVariable", {"initial": "yes"}),
     "relDateVarRw": ("xlrelease.DateVariable", "2026-01-02T03:04:05+00:00"),
 }
@@ -242,6 +244,7 @@ def test_get_current_folder(live):
 
 @pytest.mark.parametrize("key, expected", [
     ("relVar", "release-value"),
+    ("relListVar", ["second", "first"]),
     ("relMapVar", {"env": "dev", "region": "us"}),
 ])
 def test_get_release_variable(live, key, expected):
@@ -271,6 +274,7 @@ def test_get_release_variable_raises_for_an_unknown_name(live):
 
 @pytest.mark.parametrize("key, value", [
     ("relVarRw", "updated"),
+    ("relListVarRw", ["b", "a", "b"]),  # a list keeps its order and duplicates
     ("relMapVarRw", {"env": "prod", "tier": "gold"}),
 ])
 def test_set_release_variable_persists_the_value(live, key, value):

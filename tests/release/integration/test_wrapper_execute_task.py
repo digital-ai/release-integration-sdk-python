@@ -98,13 +98,17 @@ def test_abort_exception_is_reported_and_exits_with_1(isolated_wrapper, reported
     ("Configuration missing", 1, "Configuration missing"),
     (0, 0, ""),
     (None, 0, ""),
-], ids=["int", "message", "zero", "none"])
+    (True, 1, "Task exited with code 1"),
+    (False, 0, ""),
+], ids=["int", "message", "zero", "none", "true", "false"])
 def test_sys_exit_is_reported_and_propagated(isolated_wrapper, reported, code, reported_code, message):
     with pytest.raises(SystemExit) as exit_info:
         isolated_wrapper.execute_task(ExitingTask(code))
 
     assert exit_info.value.code == code
     assert reported == [OutputContext(reported_code, message, {}, [])]
+    # True == 1, so also check the type: the result format needs a number, not a JSON boolean.
+    assert type(reported[0].exit_code) is int
 
 
 def test_sys_exit_keeps_an_exit_code_the_task_set_itself(isolated_wrapper, reported):
@@ -181,6 +185,9 @@ def test_cooperative_task_sees_an_abort_requested_from_another_thread(isolated_w
     assert reported == [OutputContext(0, "", {"stoppedOnRequest": True}, [])]
 
 
-@pytest.mark.parametrize("code, expected", [(None, 0), (0, 0), (3, 3), ("message", 1)])
+@pytest.mark.parametrize("code, expected", [(None, 0), (0, 0), (3, 3), ("message", 1), (True, 1), (False, 0)])
 def test_exit_code_of_matches_the_process_exit_status(isolated_wrapper, code, expected):
-    assert isolated_wrapper._exit_code_of(SystemExit(code)) == expected
+    exit_code = isolated_wrapper._exit_code_of(SystemExit(code))
+
+    assert exit_code == expected
+    assert type(exit_code) is int

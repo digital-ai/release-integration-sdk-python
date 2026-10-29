@@ -436,7 +436,8 @@ def _exit_code_of(system_exit: SystemExit) -> int:
     if code is None:
         return 0
     if isinstance(code, int):
-        return code
+        # int() turns a bool (an int subclass), as in sys.exit(not ok), into 0 or 1.
+        return int(code)
     return 1
 
 
