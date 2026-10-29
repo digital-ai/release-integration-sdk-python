@@ -100,6 +100,10 @@ _exit_after_report = False
 # for up to ABORT_GRACE_PERIOD_SECONDS.
 _worker: Optional[threading.Thread] = None
 
+# How many times _snapshot_output_context() reads the output context when the
+# worker changes it during the read.
+_SNAPSHOT_ATTEMPTS = 5
+
 
 def _reset_report_guard() -> None:
     """Resets the report and abort state ahead of a new task execution."""
@@ -113,18 +117,43 @@ def _reset_report_guard() -> None:
 
 def _snapshot_output_context(task: Optional[BaseTask], no_task_message: str) -> OutputContext:
     """
-    Returns a copy of the task's output context, so the result is serialized
-    from a copy the worker thread cannot change mid-serialization.
+    Returns a fully detached copy of the task's output context, which shares no
+    object with the task, so the worker thread cannot change the result while
+    it is reported.
+
+    The copy is made by serializing the context. A task that ignores an abort
+    keeps running, and may change a nested output (e.g. a dict) in place while
+    it is being read, which raises RuntimeError; the copy is then retried. If
+    it cannot be made, the result is reported without output properties and
+    reporting records, and as failed.
     """
     if task is None:
         dai_logger.error(no_task_message)
         return OutputContext(1, no_task_message, {}, [])
     context = task.get_output_context()
+    error = None
+    for _ in range(_SNAPSHOT_ATTEMPTS):
+        try:
+            shallow = OutputContext(
+                context.exit_code,
+                context.job_error_message,
+                dict(context.output_properties or {}),
+                list(context.reporting_records or []),
+            )
+            return OutputContext.from_dict(json.loads(json.dumps(shallow.to_dict())))
+        except RuntimeError as e:
+            # Changed while being read; read it again.
+            error = e
+        except Exception as e:
+            # Not serializable; reading it again will not help.
+            error = e
+            break
+    dai_logger.error(f"Reporting the result without the task's outputs, as they could not be read: {error}")
     return OutputContext(
-        context.exit_code,
-        context.job_error_message,
-        dict(context.output_properties or {}),
-        list(context.reporting_records or []),
+        context.exit_code or 1,
+        context.job_error_message or f"The task's outputs could not be reported: {error}",
+        {},
+        [],
     )
 
 
@@ -234,8 +263,11 @@ def abort_handler(signum, frame):
     else:
         dai_logger.info("Abort requested")
 
-    _report_once(aborted=True, no_task_message="Abort requested before the task started")
-    _exit_process(1)
+    try:
+        _report_once(aborted=True, no_task_message="Abort requested before the task started")
+    finally:
+        # Exit even if reporting failed, so a failed report cannot keep an aborted task running.
+        _exit_process(1)
 
 
 # Register abort handler
@@ -435,6 +467,10 @@ def execute_task(task_object: BaseTask):
 
     worker = threading.Thread(target=_run_task, name="dai-task-worker", daemon=True)
     _worker = worker
+    # A task whose __init__ skips super().__init__() gets its output context on
+    # first use. Create it here, so the worker and an abort() run by the signal
+    # handler cannot each create one and lose what the other recorded.
+    task_object.get_output_context()
     worker.start()
     while worker.is_alive():
         worker.join(timeout=WORKER_POLL_INTERVAL_SECONDS)

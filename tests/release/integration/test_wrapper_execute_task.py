@@ -58,6 +58,19 @@ def test_reports_a_failing_task_as_failed(isolated_wrapper, reported):
     assert reported == [OutputContext(1, "Deployment target unreachable", {}, [])]
 
 
+def test_outputs_that_cannot_be_serialized_are_reported_as_a_failure(isolated_wrapper, reported):
+    class SetOutputTask(BaseTask):
+        def execute(self) -> None:
+            self.set_output_property("deployment", {"handle": object()})
+
+    isolated_wrapper.execute_task(SetOutputTask())
+
+    (result,) = reported
+    assert (result.exit_code, result.output_properties, result.reporting_records) == (1, {}, [])
+    assert "The task's outputs could not be reported" in result.job_error_message
+    assert "not JSON serializable" in result.job_error_message
+
+
 def test_each_execution_reports_its_own_result(isolated_wrapper, reported):
     first, second = NoOpTask(), GreetingTask()
 
@@ -130,6 +143,23 @@ def test_task_without_super_init_runs_and_reports(isolated_wrapper, reported):
     isolated_wrapper.execute_task(NoSuperInitTask())
 
     assert reported == [OutputContext(0, "", {"ok": True}, [])]
+
+
+def test_task_without_super_init_has_its_output_context_before_it_runs(isolated_wrapper, reported):
+    # Created on the main thread, so the worker and an abort() run by the signal
+    # handler share one output context instead of each creating their own.
+    contexts = []
+
+    class NoSuperInitTask(BaseTask):
+        def __init__(self):
+            pass
+
+        def execute(self) -> None:
+            contexts.append(self.__dict__.get("output_context"))
+
+    isolated_wrapper.execute_task(NoSuperInitTask())
+
+    assert contexts[0] is not None
 
 
 def test_cooperative_task_sees_an_abort_requested_from_another_thread(isolated_wrapper, reported):

@@ -52,12 +52,23 @@ def kubeconfig_path() -> str:
 
 
 def write_single_context_kubeconfig(source: str, context: str, target) -> None:
-    """Copies just ``context`` (with its cluster and user) into a kubeconfig of its own."""
+    """
+    Copies just ``context`` (with its cluster and user) into a kubeconfig of its own.
+
+    Relative certificate, key and token file paths resolve against the
+    kubeconfig's own directory, so they are made absolute for the copy.
+    """
     with open(source) as f:
         full = yaml.safe_load(f)
     ctx = next(c for c in full["contexts"] if c["name"] == context)
     cluster = next(c for c in full["clusters"] if c["name"] == ctx["context"]["cluster"])
     user = next(u for u in full["users"] if u["name"] == ctx["context"]["user"])
+    source_dir = os.path.dirname(os.path.abspath(source))
+    for entry, keys in ((cluster["cluster"], ("certificate-authority",)),
+                        (user["user"], ("client-certificate", "client-key", "tokenFile"))):
+        for key in keys:
+            if entry.get(key):
+                entry[key] = os.path.join(source_dir, os.path.expanduser(entry[key]))
     target.write_text(yaml.safe_dump({"apiVersion": "v1", "kind": "Config", "current-context": context,
                                       "contexts": [ctx], "clusters": [cluster], "users": [user]}))
 
@@ -266,6 +277,10 @@ def test_watcher_calls_back_on_each_session_key_change_until_stopped(cluster, mo
 
     def on_update():
         updates.append(read_secret(cluster, name)["session-key"])
+        if len(updates) == 2:
+            # The watcher checks the stop flag after each callback, so this ends the watch after k3.
+            # Setting it from the test thread instead could stop the watch before k3 is seen.
+            stop.set()
         updated.set()
 
     thread = threading.Thread(target=watcher.start_input_secret_watcher, args=(on_update, stop), daemon=True)
@@ -274,8 +289,7 @@ def test_watcher_calls_back_on_each_session_key_change_until_stopped(cluster, mo
 
     set_session_key("k2")
     assert updated.wait(10), "no callback after the session key changed"
-    stop.set()
-    set_session_key("k3")  # the watcher checks the stop flag after each event
+    set_session_key("k3")
     thread.join(10)
 
     assert not thread.is_alive()

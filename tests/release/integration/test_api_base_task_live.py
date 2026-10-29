@@ -50,8 +50,9 @@ TASK_TITLE = "Manual Task"
 
 def server_reachable() -> bool:
     url = urlparse(SERVER_URL)
+    port = url.port or (443 if url.scheme == "https" else 80)
     try:
-        with socket.create_connection((url.hostname, url.port or 80), timeout=0.5):
+        with socket.create_connection((url.hostname, port), timeout=0.5):
             return True
     except OSError:
         return False

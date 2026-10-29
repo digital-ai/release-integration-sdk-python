@@ -8,6 +8,7 @@ the test run. Real signals are covered by test_wrapper_e2e.py.
 import signal
 import threading
 import time
+from unittest import mock
 
 import pytest
 
@@ -143,6 +144,69 @@ def test_reported_result_is_a_snapshot_of_the_output_context(isolated_wrapper, r
     assert snapshot.output_properties is not task.get_output_properties()
     assert snapshot.reporting_records is not task.get_output_context().reporting_records
     assert snapshot == OutputContext(1, "Abort requested", {"a": 1}, [{"r": 1}])
+
+
+def test_reported_result_shares_no_nested_object_with_the_task(isolated_wrapper, reported, exit_codes):
+    task = CountingAbortTask()
+    task.set_output_property("progress", {"done": 1})
+    task.add_reporting_record({"items": [1]})
+    isolated_wrapper.dai_task_object = task
+
+    isolated_wrapper.abort_handler(signal.SIGABRT, None)
+
+    (snapshot,) = reported
+    assert snapshot.output_properties["progress"] is not task.get_output_properties()["progress"]
+    assert snapshot.reporting_records[0] is not task.get_output_context().reporting_records[0]
+    assert snapshot == OutputContext(1, "Abort requested", {"progress": {"done": 1}}, [{"items": [1]}])
+
+
+class ChangingDict(dict):
+    """A nested output the worker changes while it is read: reading it fails ``failures`` times."""
+
+    def __init__(self, failures, **items):
+        super().__init__(**items)
+        self.failures = failures
+
+    def items(self):
+        if self.failures:
+            self.failures -= 1
+            raise RuntimeError("dictionary changed size during iteration")
+        return super().items()
+
+
+def test_output_changed_while_read_is_read_again(isolated_wrapper, reported, exit_codes):
+    task = CountingAbortTask()
+    task.set_output_property("progress", ChangingDict(failures=2, done=1))
+    isolated_wrapper.dai_task_object = task
+
+    isolated_wrapper.abort_handler(signal.SIGABRT, None)
+
+    assert reported == [OutputContext(1, "Abort requested", {"progress": {"done": 1}}, [])]
+    assert exit_codes == [1]
+
+
+def test_output_that_keeps_changing_is_left_out_of_the_aborted_result(isolated_wrapper, reported, exit_codes,
+                                                                     dai_log):
+    task = CountingAbortTask()
+    task.set_output_property("progress", ChangingDict(failures=1000, done=1))
+    task.add_reporting_record({"r": 1})
+    isolated_wrapper.dai_task_object = task
+
+    isolated_wrapper.abort_handler(signal.SIGABRT, None)
+
+    assert reported == [ABORTED]
+    assert exit_codes == [1]
+    assert any("without the task's outputs" in message for message in dai_log.messages)
+
+
+def test_abort_exits_even_when_reporting_fails(isolated_wrapper, exit_codes, monkeypatch):
+    monkeypatch.setattr(isolated_wrapper, "update_output_context", mock.Mock(side_effect=RuntimeError("push failed")))
+    isolated_wrapper.dai_task_object = NoOpTask()
+
+    with pytest.raises(RuntimeError, match="push failed"):
+        isolated_wrapper.abort_handler(signal.SIGABRT, None)
+
+    assert exit_codes == [1]
 
 
 def test_abort_override_that_sets_no_exit_code_is_still_reported_as_failed(isolated_wrapper, reported, exit_codes):
