@@ -51,6 +51,12 @@ HTTP_READ_TIMEOUT = float(os.getenv('HTTP_READ_TIMEOUT', '60'))
 # execute_task()) via join(), so it stays responsive to SIGABRT/SIGTERM.
 WORKER_POLL_INTERVAL_SECONDS = 0.5
 
+# How long the abort handler waits for the task's execute() to stop after an
+# abort is requested, before it reports the aborted result and exits. Keep it
+# below the task type's abortTimeout (30s by default on xlrelease.ContainerTask;
+# the runner uses 10s if it is 0), after which the runner force-kills the container.
+ABORT_GRACE_PERIOD_SECONDS = float(os.getenv('ABORT_GRACE_PERIOD_SECONDS', '3'))
+
 # A single Session reused across all callback requests so the underlying urllib3
 # connection pool is shared (instead of opening a fresh connection per call).
 _http_session: requests.Session = requests.Session()
@@ -69,83 +75,215 @@ def get_encryptor():
 # Initialize the global task object
 dai_task_object: Optional[BaseTask] = None
 
-# Single-writer guard so the output context is flushed exactly once, whether
-# the task finishes normally (worker thread's completion path) or is aborted
-# (main thread's signal handler). Reset at the start of each execute_task()
-# call so daemon-mode iterations each get a fresh guard.
+# Report state for the current task execution. The output context is reported
+# exactly once, either by execute_task() after the worker finishes or by
+# abort_handler(). Both run on the main thread (Python runs signal handlers
+# there), so a signal can arrive while a report is in progress; the state lets
+# the handler leave that report to finish instead of exiting mid-push.
+# Reset at the start of each execute_task() call so daemon-mode iterations
+# each get a fresh state.
+_REPORT_PENDING = "pending"
+_REPORT_IN_PROGRESS = "in_progress"
+_REPORT_DONE = "done"
+
 _report_lock = threading.RLock()
-_result_reported = False
+_report_state = _REPORT_PENDING
+
+# True while abort_handler() is handling a signal; further signals are ignored.
+_abort_in_progress = False
+
+# Set when a signal arrives during a report, so the process exits once the
+# report finishes.
+_exit_after_report = False
+
+# The worker thread running the current task, which abort_handler() waits on
+# for up to ABORT_GRACE_PERIOD_SECONDS.
+_worker: Optional[threading.Thread] = None
+
+# How many times _snapshot_output_context() reads the output context when the
+# worker changes it during the read.
+_SNAPSHOT_ATTEMPTS = 5
 
 
 def _reset_report_guard() -> None:
-    """Clears the single-writer flush guard ahead of a new task execution."""
-    global _result_reported
+    """Resets the report and abort state ahead of a new task execution."""
+    global _report_state, _abort_in_progress, _exit_after_report, _worker
     with _report_lock:
-        _result_reported = False
+        _report_state = _REPORT_PENDING
+        _abort_in_progress = False
+        _exit_after_report = False
+        _worker = None
 
 
-def _report_once() -> bool:
+def _snapshot_output_context(task: Optional[BaseTask], no_task_message: str) -> OutputContext:
     """
-    Flushes the current dai_task_object's output context exactly once. The
-    first caller (either the worker thread's normal completion path or the
-    main thread's abort handler) wins; subsequent calls are no-ops.
+    Returns a fully detached copy of the task's output context, which shares no
+    object with the task, so the worker thread cannot change the result while
+    it is reported.
 
-    Returns True if this call performed the flush, False if it was already
-    reported by another caller.
+    The copy is made by serializing the context. A task that ignores an abort
+    keeps running, and may change a nested output (e.g. a dict) in place while
+    it is being read, which raises RuntimeError; the copy is then retried. If
+    it cannot be made, the result is reported without output properties and
+    reporting records, and as failed.
     """
-    global _result_reported
+    if task is None:
+        dai_logger.error(no_task_message)
+        return OutputContext(1, no_task_message, {}, [])
+    context = task.get_output_context()
+    error = None
+    for _ in range(_SNAPSHOT_ATTEMPTS):
+        try:
+            shallow = OutputContext(
+                context.exit_code,
+                context.job_error_message,
+                dict(context.output_properties or {}),
+                list(context.reporting_records or []),
+            )
+            return OutputContext.from_dict(json.loads(json.dumps(shallow.to_dict())))
+        except RuntimeError as e:
+            # Changed while being read; read it again.
+            error = e
+        except Exception as e:
+            # Not serializable; reading it again will not help.
+            error = e
+            break
+    dai_logger.error(f"Reporting the result without the task's outputs, as they could not be read: {error}")
+    return OutputContext(
+        context.exit_code or 1,
+        context.job_error_message or f"The task's outputs could not be reported: {error}",
+        {},
+        [],
+    )
+
+
+# How long _flush_std_streams() waits for stdout/stderr to flush before exiting.
+FLUSH_TIMEOUT_SECONDS = 1.0
+
+
+def _flush_std_streams() -> None:
+    """
+    Flushes stdout/stderr before os._exit(), which skips Python's own flush.
+
+    Waits at most FLUSH_TIMEOUT_SECONDS. A task still writing to a full pipe
+    that nobody reads holds that stream's lock, so an unbounded flush would
+    keep the process from exiting. Nothing is logged on a timeout, since the
+    logger writes to stdout, which may be the blocked stream.
+    """
+    def flush():
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.flush()
+            except Exception:
+                pass
+
+    flusher = threading.Thread(target=flush, name="dai-flush", daemon=True)
+    flusher.start()
+    flusher.join(timeout=FLUSH_TIMEOUT_SECONDS)
+
+
+def _exit_process(code: int) -> None:
+    _flush_std_streams()
+    os._exit(code)
+
+
+def _report_once(aborted: bool = False,
+                 no_task_message: str = "Task produced no output context") -> bool:
+    """
+    Reports the current dai_task_object's output context exactly once. The
+    first caller (execute_task() after the worker finishes, or abort_handler())
+    wins; later calls are no-ops.
+
+    When aborted is True, the reported result never has exit code 0, even if
+    the task's abort() override did not set one.
+
+    Returns True if this call reported the result, False if it was already
+    reported or is being reported.
+    """
+    global _report_state
     with _report_lock:
-        if _result_reported:
+        if _report_state != _REPORT_PENDING:
             return False
-        _result_reported = True
+        _report_state = _REPORT_IN_PROGRESS
 
-    if dai_task_object is not None and dai_task_object.get_output_context() is not None:
-        update_output_context(dai_task_object.get_output_context())
-    else:
-        dai_logger.error("No output context available to report task result")
-        update_output_context(OutputContext(1, "Task produced no output context", {}, []))
+    try:
+        context = _snapshot_output_context(dai_task_object, no_task_message)
+        if aborted and not context.exit_code:
+            context.exit_code = 1
+            context.job_error_message = context.job_error_message or "Abort requested"
+        update_output_context(context)
+    finally:
+        with _report_lock:
+            _report_state = _REPORT_DONE
+        if _exit_after_report:
+            dai_logger.info("Exiting after reporting the task result, as an abort was requested")
+            _exit_process(1)
     return True
 
 
 def abort_handler(signum, frame):
     """
-    Handles SIGTERM/SIGABRT by requesting a cooperative abort and running the
-    task's abort() cleanup hook (if a task object exists), then flushing the
-    (aborted) output context exactly once via _report_once(), and finally
-    terminating the process immediately with os._exit(1).
+    Handles SIGTERM/SIGABRT:
+
+    1. signals is_abort_requested() and runs the task's abort() hook;
+    2. waits up to ABORT_GRACE_PERIOD_SECONDS for execute() to stop, so a task
+       that polls is_abort_requested() can finish and have its outputs reported;
+    3. reports the aborted result exactly once and exits with os._exit(1).
+
+    If the signal arrives while a result is being reported, the report is left
+    to finish and the process exits right after it. Signals received while an
+    abort is already being handled are ignored.
 
     os._exit() (rather than sys.exit()) is used deliberately: it bypasses all
     Python finally/atexit machinery, which matters in daemon mode where run()'s
     finally block would otherwise restart a blocking input-context watcher and
     prevent the process from actually exiting.
-
-    The worker thread that may still be running the task's execute() is a
-    daemon thread and is not waited on; process exit here is sufficient to
-    end it.
     """
+    global _abort_in_progress, _exit_after_report
     signal_name = signal.Signals(signum).name
-    dai_logger.info(f"Received {signal_name} to gracefully stop the process")
-    global dai_task_object
 
-    if dai_task_object:
-        dai_task_object._request_abort()
+    with _report_lock:
+        if _abort_in_progress:
+            dai_logger.info(f"Received {signal_name}, ignored: abort already in progress")
+            return
+        if _report_state == _REPORT_IN_PROGRESS:
+            dai_logger.info(f"Received {signal_name} while reporting the task result; exiting once it is reported")
+            _exit_after_report = True
+            return
+        _abort_in_progress = True
+
+    dai_logger.info(f"Received {signal_name} to gracefully stop the process")
+
+    task = dai_task_object
+    if task is not None:
+        task._request_abort()
         try:
-            dai_task_object.abort()
+            task.abort()
         except AbortException:
             # Expected: the default abort() raises this after marking the
             # output context as aborted.
             pass
         except SystemExit:
             # A task's overridden abort() might still call sys.exit()/exit();
-            # ignore it so we can still flush and exit deliberately below.
+            # ignore it so we can still report and exit deliberately below.
             pass
         except Exception:
             dai_logger.error("Unexpected error occurred in abort()", exc_info=True)
+
+        worker = _worker
+        if worker is not None and worker.is_alive() and ABORT_GRACE_PERIOD_SECONDS > 0:
+            dai_logger.info(f"Waiting up to {ABORT_GRACE_PERIOD_SECONDS}s for the task to stop")
+            worker.join(timeout=ABORT_GRACE_PERIOD_SECONDS)
+            if worker.is_alive():
+                dai_logger.info("Task did not stop within the grace period; reporting the aborted result")
     else:
         dai_logger.info("Abort requested")
 
-    _report_once()
-    os._exit(1)
+    try:
+        _report_once(aborted=True, no_task_message="Abort requested before the task started")
+    finally:
+        # Exit even if reporting failed, so a failed report cannot keep an aborted task running.
+        _exit_process(1)
 
 
 # Register abort handler
@@ -292,6 +430,17 @@ def should_retry_callback_request(encrypted_data) -> bool:
     return len(encrypted_data) >= size_of_1Mb and not input_context_file
 
 
+def _exit_code_of(system_exit: SystemExit) -> int:
+    """Returns the process exit status that sys.exit(code) produces."""
+    code = system_exit.code
+    if code is None:
+        return 0
+    if isinstance(code, int):
+        # int() turns a bool (an int subclass), as in sys.exit(not ok), into 0 or 1.
+        return int(code)
+    return 1
+
+
 def execute_task(task_object: BaseTask):
     """
     Execute the given task object on a dedicated daemon worker thread, while the
@@ -300,18 +449,21 @@ def execute_task(task_object: BaseTask):
     an uninterruptible call.
 
     The worker thread is a daemon thread: if the process exits (e.g. via the
-    signal handler's os._exit(1) during an abort), it is not waited on.
+    signal handler's os._exit(1) during an abort), it is not waited on beyond
+    the abort grace period.
 
     After the worker finishes on its own (the non-aborted path), the output
-    context is flushed exactly once via _report_once() -- a no-op if the
+    context is reported exactly once via _report_once() -- a no-op if the
     abort handler already reported it first.
 
     If the worker raised SystemExit (e.g. BaseTask.execute_task()'s sys.exit(1)
     after an AbortException, or a user task calling sys.exit() directly), it is
     captured on the worker thread and re-raised here on the main thread after
-    reporting, so the process exits with the intended status.
+    reporting, so the process exits with the intended status. A non-zero
+    sys.exit() code is also reported as the task's exit code when the task
+    did not set one itself.
     """
-    global dai_task_object
+    global dai_task_object, _worker
     _reset_report_guard()
     dai_task_object = task_object
     dai_logger.info("Starting task execution")
@@ -325,29 +477,32 @@ def execute_task(task_object: BaseTask):
             # SystemExit (a BaseException, not Exception) only terminates this
             # worker thread and is otherwise swallowed by the interpreter.
             # Capture it so the main thread can propagate the intended process
-            # exit status after the result is reported. This covers both
-            # BaseTask.execute_task()'s sys.exit(1) after an AbortException and
-            # a user task calling sys.exit() directly.
+            # exit status after the result is reported.
             worker_outcome["exit"] = e
         except Exception:
             dai_logger.error("Unexpected error occurred.", exc_info=True)
 
     worker = threading.Thread(target=_run_task, name="dai-task-worker", daemon=True)
+    _worker = worker
+    # A task whose __init__ skips super().__init__() gets its output context on
+    # first use. Create it here, so the worker and an abort() run by the signal
+    # handler cannot each create one and lose what the other recorded.
+    task_object.get_output_context()
     worker.start()
     while worker.is_alive():
         worker.join(timeout=WORKER_POLL_INTERVAL_SECONDS)
 
+    if "exit" in worker_outcome:
+        exit_code = _exit_code_of(worker_outcome["exit"])
+        context = task_object.get_output_context()
+        if exit_code and not context.exit_code:
+            context.exit_code = exit_code
+            if not context.job_error_message:
+                code = worker_outcome["exit"].code
+                context.job_error_message = code if isinstance(code, str) else f"Task exited with code {exit_code}"
+
     _report_once()
 
-    # Re-raise the worker's SystemExit on the main thread (after reporting) so
-    # the process exits with the status the task intended, matching the
-    # pre-worker-thread (main-branch) behavior. The abort-handler path
-    # (os._exit) is separate and unaffected.
-    #
-    # TODO: Should the worker's SystemExit code also be reflected in the
-    # reported OutputContext.exit_code? Currently (matching master) the context
-    # is reported as-is, so a task calling sys.exit(2) without set_exit_code()
-    # reports a success context (exit_code 0) while the process exits 2.
     if "exit" in worker_outcome:
         raise worker_outcome["exit"]
 

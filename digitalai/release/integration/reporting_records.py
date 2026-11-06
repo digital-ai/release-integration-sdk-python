@@ -106,3 +106,40 @@ class DeploymentRecord:
     environment_name: Optional[str] = None
     server_url: Optional[str] = None
     server_user: Optional[str] = None
+
+
+def _decimal_string(value) -> Optional[str]:
+    """Sends a cost as the decimal string the server stores, e.g. Decimal("0.0123") -> "0.0123"."""
+    return None if value is None else str(value)
+
+
+@dataclass_json(letter_case=LetterCase.CAMEL)
+@dataclass
+class AiUsageRecord:
+    """
+     AiUsageRecord is a data model class which represents one AI agent execution attempt of a task:
+     the language model provider and model, the agent, why it stopped, and its token usage and cost.
+
+     The record's start and end times are taken from the task. The provider's endpoint and user go in
+     server_url and server_user. estimated_cost is a decimal string; pass a str or a Decimal, since a
+     float can carry rounding noise (str(0.1 + 0.2) is "0.30000000000000004").
+
+     Only add it on a Release version that defines udm.AiUsageRecord: an older server cannot read
+     the task's result and fails the task, without its output properties.
+    """
+    target_id: str
+    llm_provider: Optional[str] = None
+    agent: Optional[str] = None
+    model: Optional[str] = None
+    termination_reason: Optional[str] = None
+    iterations: Optional[int] = None
+    tool_calls: Optional[int] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    estimated_cost: Optional[str] = field(default=None, metadata=config(encoder=_decimal_string))
+    currency: str = "USD"
+    type: str = "udm.AiUsageRecord"
+    id: str = ""
+    server_url: Optional[str] = None
+    server_user: Optional[str] = None

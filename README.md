@@ -76,6 +76,21 @@ class ShowVersion(ApiBaseTask):
 
 ## Changelog
 
+### Unreleased
+
+#### 🚀 Features
+
+- Tasks can be aborted. On abort, the SDK calls the task's `abort()` method; long-running tasks can check `is_abort_requested()` and stop early.
+- After an abort, the SDK waits briefly (`ABORT_GRACE_PERIOD_SECONDS`, default 3) so the task's outputs and reporting records are still sent.
+- Added the `AiUsageRecord` reporting record for AI agent runs (model, tokens, cost and more). Requires a Release version that supports `udm.AiUsageRecord`.
+
+#### 🐛 Fixes
+
+- The task result is no longer cut off if an abort signal arrives while it is being reported.
+- Aborted tasks no longer report exit code 0; `sys.exit(n)` now reports exit code `n`.
+- Tasks that don't call `super().__init__()` work again.
+- `setReleaseVariable()`, `setFolderVariable()` and `setGlobalVariable()` now accept a list for list variables.
+
 ### Version 26.3.1
 
 #### 🚀 Features
