@@ -80,16 +80,16 @@ class ShowVersion(ApiBaseTask):
 
 #### 🚀 Features
 
-- Tasks can be aborted: the SDK runs `execute()` on a worker thread and handles `SIGABRT`/`SIGTERM` by calling the task's `abort()` hook. Long-running tasks can poll the new `is_abort_requested()` to stop cooperatively.
-- After an abort is requested, the SDK waits up to `ABORT_GRACE_PERIOD_SECONDS` (default 3) for `execute()` to return, so the outputs and reporting records a task sets on its way out are reported.
-- New `AiUsageRecord` reporting record (`udm.AiUsageRecord`) for one AI agent execution: LLM provider, model, agent, termination reason, iterations, tool calls, token counts and estimated cost. Add it with `add_reporting_record()` like the other records, but only on a Release version that defines `udm.AiUsageRecord`: an older server cannot read the task's result and fails the task.
+- Tasks can be aborted. On abort, the SDK calls the task's `abort()` method; long-running tasks can check `is_abort_requested()` and stop early.
+- After an abort, the SDK waits briefly (`ABORT_GRACE_PERIOD_SECONDS`, default 3) so the task's outputs and reporting records are still sent.
+- Added the `AiUsageRecord` reporting record for AI agent runs (model, tokens, cost and more). Requires a Release version that supports `udm.AiUsageRecord`.
 
 #### 🐛 Fixes
 
-- A signal received while the task result is being reported no longer cuts off the report; repeat signals during an abort are ignored.
-- An aborted result is never reported with exit code 0, and a task calling `sys.exit(n)` is reported with exit code `n`.
-- Tasks whose `__init__` does not call `super().__init__()` work again.
-- `setReleaseVariable()`, `setFolderVariable()` and `setGlobalVariable()` accept a list for an existing list variable (`xlrelease.ListStringVariable`); it was rejected with a `TypeError` as if the variable held a string.
+- The task result is no longer cut off if an abort signal arrives while it is being reported.
+- Aborted tasks no longer report exit code 0; `sys.exit(n)` now reports exit code `n`.
+- Tasks that don't call `super().__init__()` work again.
+- `setReleaseVariable()`, `setFolderVariable()` and `setGlobalVariable()` now accept a list for list variables.
 
 ### Version 26.3.1
 
