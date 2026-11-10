@@ -352,3 +352,44 @@ def test_unreadable_next_input_is_not_reported_to_the_previous_task(daemon_wrapp
     assert daemon_wrapper.run_task_from_input() is None
 
     assert len(reported_to) == 1
+
+
+# -- the input context secret cannot be read for a while ---------------------
+
+def test_next_task_runs_after_its_input_could_not_be_read_for_a_while(daemon_wrapper, reported_to, monkeypatch):
+    secret = StaticSecret("First")
+    monkeypatch.setattr(k8s, "get_client", lambda: secret)
+    first_key = daemon_wrapper.run_task_from_input()
+
+    # The runner assigns the next task; the first two reads of its input fail (API server unavailable).
+    secret.data = input_secret_data("Next")
+    real_read = secret.read_namespaced_secret
+    reads = mock.Mock(side_effect=[RuntimeError("connection refused"), RuntimeError("connection refused"),
+                                   real_read(SECRET, NAMESPACE)])
+    monkeypatch.setattr(secret, "read_namespaced_secret", reads)
+
+    stop = threading.Event()
+    events = [modified(first_key), modified(secret.data["session-key"])]
+    monkeypatch.setattr(watcher.watch, "Watch", lambda: OneWatch(events, stop))
+    watcher.start_input_context_watcher(daemon_wrapper.run_task_from_input, first_key, stop)
+
+    assert reads.call_count == 3
+    assert [(url, r.output_properties.get("greeting")) for url, r in reported_to] == [
+        ("http://127.0.0.1:9/callback/First", "Hello First"),
+        ("http://127.0.0.1:9/callback/Next", "Hello Next"),
+    ]
+
+
+def test_executor_exits_when_its_first_input_cannot_be_read(daemon_wrapper, reported, monkeypatch):
+    # The first task's result may never reach the runner; exiting makes the runner fail that task,
+    # instead of the watcher treating its input as handled and the task hanging.
+    unreadable = mock.Mock(read_namespaced_secret=mock.Mock(side_effect=RuntimeError("connection refused")))
+    monkeypatch.setattr(k8s, "get_client", lambda: unreadable)
+    start_watcher = mock.Mock()
+    monkeypatch.setattr(watcher, "start_input_context_watcher", start_watcher)
+
+    with pytest.raises(SystemExit) as exited:
+        daemon_wrapper.run()
+
+    assert exited.value.code == 1
+    start_watcher.assert_not_called()

@@ -7,10 +7,13 @@ The runner starts each task on an idle executor by writing new input with a new
 ``session-key``, one at a time:
 
 - it remembers every ``session-key`` it has handled, and calls back only for a
-  key it has not seen. The callback may return the key of the input it actually
-  ran, which then counts as handled too, as the secret can change between the
-  event and the read. (The wrapper also refuses to run an input twice, so this
-  only saves needless reads of the secret.)
+  key it has not seen. The callback returns the key of the input it read, which
+  then counts as handled too, as the secret can change between the event and
+  the read. (The wrapper also refuses to run an input twice, so this only saves
+  needless reads of the secret.)
+- if the callback could not read the input (returns None), the key is not
+  handled yet: the callback is repeated with a backoff until the input is read,
+  so a brief API server outage cannot lose a task.
 - a single watch is open at a time. When it fails or ends, it is opened again,
   with a backoff, and the handled keys are kept, so neither events delivered
   again nor the current state of the secret can run a handled task again.
@@ -38,8 +41,9 @@ SESSION_KEY = "session-key"
 RECONNECT_DELAY_SECONDS = float(os.getenv("INPUT_WATCH_RECONNECT_DELAY", "1"))
 MAX_RECONNECT_DELAY_SECONDS = float(os.getenv("INPUT_WATCH_MAX_RECONNECT_DELAY", "30"))
 
-# Called for each new input; returns the session-key of the input it ran, or
-# None if it could not read one.
+# Called for each new input; returns the session-key of the input it read
+# (anything but None counts as read), or None if it could not read the input,
+# in which case it is called again.
 OnNewInput = Callable[[], Optional[str]]
 
 # Replaced in tests.
@@ -127,7 +131,7 @@ def _watch_input_secret(on_new_input: OnNewInput, stop: threading.Event, state: 
     w = watch.Watch()
     try:
         for event in w.stream(kubernetes_client.list_namespaced_secret, namespace, field_selector=field_selector):
-            _handle_event(event, on_new_input, state)
+            _handle_event(event, on_new_input, state, stop)
 
             # Check if the watcher should be stopped
             if stop.is_set():
@@ -137,7 +141,7 @@ def _watch_input_secret(on_new_input: OnNewInput, stop: threading.Event, state: 
         w.stop()
 
 
-def _handle_event(event, on_new_input: OnNewInput, state: _WatchState) -> None:
+def _handle_event(event, on_new_input: OnNewInput, state: _WatchState, stop: threading.Event) -> None:
     if event.get("type") == "DELETED":
         # The runner deletes the secret when it removes the executor; there is no input to run.
         return
@@ -153,9 +157,32 @@ def _handle_event(event, on_new_input: OnNewInput, state: _WatchState) -> None:
         return
 
     dai_logger.info("Detected input context value change")
-    # Mark it handled before running it, so a later event cannot run it again,
-    # even if the callback fails.
+    executed_session_key = _run_new_input(on_new_input, stop)
+    if executed_session_key is None:
+        return  # stopped before the input could be read
+    # Handled once read, whatever the outcome: the wrapper has run it or
+    # reported its failure, and never runs an input twice.
     state.handled_session_keys.add(session_key)
-    executed_session_key = on_new_input()
     if isinstance(executed_session_key, str) and executed_session_key:
         state.handled_session_keys.add(executed_session_key)
+
+
+def _run_new_input(on_new_input: OnNewInput, stop: threading.Event):
+    """
+    Calls on_new_input until it has read the new input, i.e. returns anything
+    but None. A None result means the input context secret could not be read
+    (e.g. the API server was briefly unavailable): nothing was run or reported,
+    so the call is repeated with a backoff rather than waiting for another
+    event, which may never come. Returns None only if stop is set first.
+    """
+    delay = RECONNECT_DELAY_SECONDS
+    while True:
+        result = on_new_input()
+        if result is not None:
+            return result
+        if stop.is_set():
+            return None
+        dai_logger.warning(f"Could not read the new task input; trying again in {delay:g}s")
+        if stop.wait(delay):
+            return None
+        delay = min(delay * 2, MAX_RECONNECT_DELAY_SECONDS)

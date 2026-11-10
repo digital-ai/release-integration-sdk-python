@@ -574,11 +574,17 @@ def run():
     A task that calls sys.exit() ends the process, in either mode, once its
     result has been reported.
     """
-    run_task_from_input()
+    executed_session_key = run_task_from_input()
     if execution_mode == "daemon":
+        if not input_context_file and executed_session_key is None:
+            # The first task's input could not be read, so its result may never
+            # reach the runner. Exiting makes the runner fail that task, instead
+            # of the watcher treating the input as handled and the task hanging.
+            dai_logger.error("Could not read the initial task input; exiting so the runner replaces this executor")
+            sys.exit(1)
         # A single watcher runs every later task; see watcher.py for why the
         # watcher must not be started again from each task run.
-        watcher.start_input_context_watcher(run_task_from_input, _executed_session_key)
+        watcher.start_input_context_watcher(run_task_from_input, executed_session_key)
         dai_logger.error("Stopped watching for new tasks; exiting so the runner replaces this executor")
         sys.exit(1)
 
@@ -594,7 +600,7 @@ def run_task_from_input() -> Optional[str]:
     arrive after the input it announced was already run.
 
     Returns the session-key of the input context secret that was read, or None
-    if no secret was read.
+    if no secret was read; in daemon mode the watcher then tries again.
     """
     global _executed_session_key
     _executed_session_key = None

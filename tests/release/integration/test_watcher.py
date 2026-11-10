@@ -8,6 +8,8 @@ from digitalai.release.integration import k8s, watcher
 
 SECRET = "input-context-secret"
 NAMESPACE = "runner-ns"
+# What a callback returns once it has read the new input (None means it could not).
+READ = "key-of-the-input-read"
 
 
 def secret_event(session_key):
@@ -124,7 +126,7 @@ def test_input_context_watcher_returns_when_the_watch_cannot_be_configured(monke
 # -- each session-key runs at most once -------------------------------------
 
 def test_runs_new_input_already_in_the_secret_when_the_watch_opens(kube_client, monkeypatch):
-    on_update = mock.Mock(return_value=None)
+    on_update = mock.Mock(return_value=READ)
 
     watch_secret_after(monkeypatch, "k1", [secret_event("k2")], on_update)
 
@@ -132,7 +134,7 @@ def test_runs_new_input_already_in_the_secret_when_the_watch_opens(kube_client, 
 
 
 def test_does_not_run_the_executed_input_again(kube_client, monkeypatch):
-    on_update = mock.Mock(return_value=None)
+    on_update = mock.Mock(return_value=READ)
 
     watch_secret_after(monkeypatch, "k1", [secret_event("k1"), secret_event("k2"), secret_event("k2"),
                                            secret_event("k1")], on_update)
@@ -150,7 +152,7 @@ def test_input_the_callback_ran_counts_as_handled(kube_client, monkeypatch):
 
 
 def test_ignores_a_deleted_secret(kube_client, monkeypatch):
-    on_update = mock.Mock(return_value=None)
+    on_update = mock.Mock(return_value=READ)
     deleted = dict(secret_event("k2"), type="DELETED")
 
     watch_secret_after(monkeypatch, "k1", [deleted], on_update)
@@ -209,7 +211,7 @@ def watch_loop(monkeypatch, *connections, executed_session_key="k1", on_update=N
     fake = FakeConnections(stop, *connections)
     monkeypatch.setattr(watcher, "watch", fake)
     monkeypatch.setattr(watcher, "RECONNECT_DELAY_SECONDS", 0)
-    on_update = on_update or mock.Mock(return_value=None)
+    on_update = on_update or mock.Mock(return_value=READ)
     watcher.start_input_context_watcher(on_update, executed_session_key, stop)
     return on_update, fake
 
@@ -235,7 +237,7 @@ def recorded_waits(monkeypatch, *connections, delay=1, max_delay=30, watch_secon
         now[0] += seconds
     monkeypatch.setattr(watcher, "_clock", iter(readings).__next__)
 
-    watcher.start_input_context_watcher(mock.Mock(return_value=None), "k1", stop)
+    watcher.start_input_context_watcher(mock.Mock(return_value=READ), "k1", stop)
     return waits
 
 
@@ -344,3 +346,64 @@ def test_loop_waits_before_reopening_a_watch_that_ended_cleanly(kube_client, mon
     waits = recorded_waits(monkeypatch, [secret_event("k1")], [], watch_seconds=[3600, 0])
 
     assert waits == [1]
+
+
+# -- an input that could not be read is retried, not dropped -----------------
+
+def test_input_that_could_not_be_read_is_retried_until_it_is_read(kube_client, monkeypatch):
+    # The callback returns None when the input context secret cannot be read (nothing was run).
+    monkeypatch.setattr(watcher, "RECONNECT_DELAY_SECONDS", 0)
+    on_update = mock.Mock(side_effect=[None, None, "k2"])
+
+    watch_secret_after(monkeypatch, "k1", [secret_event("k2")], on_update)
+
+    assert on_update.call_count == 3
+
+
+def test_input_read_after_retrying_is_not_run_again(kube_client, monkeypatch):
+    monkeypatch.setattr(watcher, "RECONNECT_DELAY_SECONDS", 0)
+    on_update = mock.Mock(side_effect=[None, "k2"])
+
+    watch_secret_after(monkeypatch, "k1", [secret_event("k2"), secret_event("k2")], on_update)
+
+    assert on_update.call_count == 2
+
+
+def test_input_retried_without_a_further_event(kube_client, monkeypatch):
+    # No other event arrives after the one announcing k2; the retry must not wait for one.
+    monkeypatch.setattr(watcher, "RECONNECT_DELAY_SECONDS", 0)
+    on_update = mock.Mock(side_effect=[None, "k2"])
+
+    on_update, _ = watch_loop(monkeypatch, [secret_event("k2")], on_update=on_update)
+
+    assert on_update.call_count == 2
+
+
+def test_retrying_an_unread_input_backs_off(kube_client, monkeypatch):
+    stop = threading.Event()
+    waits = []
+    monkeypatch.setattr(stop, "wait", lambda delay: waits.append(delay) or False)
+    monkeypatch.setattr(watcher, "RECONNECT_DELAY_SECONDS", 1)
+    monkeypatch.setattr(watcher, "MAX_RECONNECT_DELAY_SECONDS", 3)
+    monkeypatch.setattr(watcher, "watch", SimpleNamespace(Watch=lambda: FakeWatch([secret_event("k2")])))
+
+    watcher.start_input_secret_watcher(mock.Mock(side_effect=[None, None, None, "k2"]), stop, "k1")
+
+    assert waits == [1, 2, 3]
+
+
+def test_retrying_an_unread_input_stops_when_the_watcher_is_stopped(kube_client, monkeypatch):
+    monkeypatch.setattr(watcher, "RECONNECT_DELAY_SECONDS", 0)
+    stop = threading.Event()
+    calls = []
+
+    def never_read():
+        calls.append(1)
+        if len(calls) == 2:
+            stop.set()
+        return None
+
+    monkeypatch.setattr(watcher, "watch", SimpleNamespace(Watch=lambda: FakeWatch([secret_event("k2")])))
+    watcher.start_input_secret_watcher(never_read, stop, "k1")
+
+    assert len(calls) == 2
