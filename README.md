@@ -76,7 +76,7 @@ class ShowVersion(ApiBaseTask):
 
 ## Changelog
 
-### Version 27.1.0b1
+### Version 26.3.2
 
 #### 🚀 Features
 
