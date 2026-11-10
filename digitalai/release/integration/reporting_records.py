@@ -117,15 +117,7 @@ def _decimal_string(value) -> Optional[str]:
 @dataclass
 class AiUsageRecord:
     """
-     AiUsageRecord is a data model class which represents one AI agent execution attempt of a task:
-     the language model provider and model, the agent, why it stopped, and its token usage and cost.
-
-     The record's start and end times are taken from the task. The provider's endpoint and user go in
-     server_url and server_user. estimated_cost is a decimal string; pass a str or a Decimal, since a
-     float can carry rounding noise (str(0.1 + 0.2) is "0.30000000000000004").
-
-     Only add it on a Release version that defines udm.AiUsageRecord: an older server cannot read
-     the task's result and fails the task, without its output properties.
+     AiUsageRecord is a data model class which represents the record of an AI agent execution.
     """
     target_id: str
     llm_provider: Optional[str] = None
