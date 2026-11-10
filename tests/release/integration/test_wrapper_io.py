@@ -180,6 +180,18 @@ def test_task_details_from_secret_are_decrypted_with_its_session_key(on_kubernet
     assert properties["yourName"] == "World"
 
 
+def test_task_details_from_secret_record_its_session_key_for_the_watcher(on_kubernetes, monkeypatch, session_key):
+    encrypted = AESJobDataEncryptor(session_key).encrypt(json.dumps(input_context()))
+    install_kube(monkeypatch, {INPUT_SECRET: {
+        "session-key": b64(session_key), "url": secret_url(CALLBACK_URL), "input": b64(encrypted),
+    }})
+
+    on_kubernetes.get_task_details()
+
+    # Recorded as stored in the secret, which is how the watcher sees it.
+    assert on_kubernetes.input_session_key == b64(session_key)
+
+
 def test_task_details_are_fetched_from_the_fetch_url_when_the_secret_has_no_input(on_kubernetes, monkeypatch):
     install_kube(monkeypatch, {INPUT_SECRET: {
         "session-key": b64(""), "url": secret_url(CALLBACK_URL), "input": "",

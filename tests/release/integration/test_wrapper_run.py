@@ -105,9 +105,32 @@ def test_daemon_mode_watches_for_the_next_input_after_running(isolated_wrapper, 
     run_task(hello_context())
 
     if watches:
-        start_watcher.assert_called_once_with(isolated_wrapper.run)
+        # Input from a file has no session key to hand over.
+        start_watcher.assert_called_once_with(isolated_wrapper.run_once, None)
     else:
         start_watcher.assert_not_called()
+
+
+def test_daemon_mode_runs_each_new_input_from_the_same_watcher(isolated_wrapper, importable_workspace, reported,
+                                                               monkeypatch, tmp_path):
+    # D-44246: each input used to start a nested watcher from run()'s finally block. When the
+    # nested watches unwound, an outer one acted on a stale event and ran the last input again.
+    input_path = tmp_path / "input.json"
+    input_path.write_text(json.dumps(hello_context()))
+    monkeypatch.setattr(isolated_wrapper, "input_context_file", str(input_path))
+    monkeypatch.setattr(isolated_wrapper, "execution_mode", "daemon")
+
+    def watch(on_new_input, current_session_key):
+        for _ in range(3):
+            on_new_input()
+
+    start_watcher = mock.Mock(side_effect=watch)
+    monkeypatch.setattr(isolated_wrapper.watcher, "start_input_context_watcher", start_watcher)
+
+    isolated_wrapper.run()
+
+    start_watcher.assert_called_once()
+    assert len(reported) == 4
 
 
 # -- find_class_file -------------------------------------------------------

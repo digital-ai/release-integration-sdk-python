@@ -41,6 +41,11 @@ execution_mode: str = os.getenv('EXECUTOR_EXECUTION_MODE', '')
 
 input_context: Optional[InputContext] = None
 
+# Session key of the input last read from the input-context secret, as stored
+# in the secret. In daemon mode the watcher uses it to tell new input from the
+# input already run.
+input_session_key: Optional[str] = None
+
 size_of_1Mb = 1024 * 1024
 
 # HTTP timeouts (seconds). A missing timeout lets a hung server stall the runner forever.
@@ -235,9 +240,9 @@ def abort_handler(signum, frame):
     abort is already being handled are ignored.
 
     os._exit() (rather than sys.exit()) is used deliberately: it bypasses all
-    Python finally/atexit machinery, which matters in daemon mode where run()'s
-    finally block would otherwise restart a blocking input-context watcher and
-    prevent the process from actually exiting.
+    Python finally/atexit machinery, which matters in daemon mode where the
+    blocking input-context watcher loop would otherwise keep the process
+    running.
     """
     global _abort_in_progress, _exit_after_report
     signal_name = signal.Signals(signum).name
@@ -323,8 +328,9 @@ def get_task_details() -> Tuple[Dict[str, Any], str, str]:
         k8s_client = k8s.get_client()
         dai_logger.info("Reading input context from secret")
         secret = k8s_client.read_namespaced_secret(input_context_secret, runner_namespace)
-        global base64_session_key, callback_url
-        base64_session_key = base64.b64decode(secret.data["session-key"])
+        global base64_session_key, callback_url, input_session_key
+        input_session_key = secret.data["session-key"]
+        base64_session_key = base64.b64decode(input_session_key)
         callback_url = base64.b64decode(secret.data["url"])
 
         input_content = secret.data["input"]
@@ -525,6 +531,25 @@ def find_class_file(root_dir, class_name):
 
 
 def run():
+    """
+    Runs the task in the input context. In daemon mode, then keeps the process
+    running and runs each new input the runner writes to the input-context
+    secret, one at a time, from a single watch loop.
+    """
+    run_once()
+    if execution_mode == "daemon":
+        watcher.start_input_context_watcher(run_once, input_session_key)
+
+
+def run_once() -> Optional[str]:
+    """
+    Runs the task in the current input context and reports its result.
+
+    Returns the session key of the input that was run, when the input came from
+    the input-context secret, so the daemon-mode watcher does not run it again.
+    """
+    global input_session_key
+    input_session_key = None
     try:
         # Get task details, parse the script file to get the task class, import the module,
         # create an instance of the task class, and execute the task
@@ -571,9 +596,7 @@ def run():
         # Log the error and update the output context file with exit code 1 if an exception is raised
         dai_logger.error("Unexpected error occurred.", exc_info=True)
         update_output_context(OutputContext(1, str(e), {}, []))
-    finally:
-        if execution_mode == "daemon":
-            watcher.start_input_context_watcher(run)
+    return input_session_key
 
 
 if __name__ == "__main__":
