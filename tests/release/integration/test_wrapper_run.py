@@ -113,9 +113,17 @@ def test_daemon_mode_watches_for_the_next_input_once_and_exits_when_watching_sto
     with pytest.raises(SystemExit) as exited:
         run_task(hello_context())
 
-    # Read from a file, so no session-key was executed.
-    start_watcher.assert_called_once_with(isolated_wrapper.run_task_from_input, None)
+    # Read from a file: no session-key, but "" (input read) rather than None (input not read).
+    start_watcher.assert_called_once_with(isolated_wrapper.run_task_from_input, "")
     assert exited.value.code == 1
+
+
+def test_input_file_counts_as_read_even_if_it_cannot_be_opened(isolated_wrapper, reported, monkeypatch, tmp_path):
+    # Its failure is reported, so in daemon mode the watcher must not retry it as an unread input.
+    monkeypatch.setattr(isolated_wrapper, "input_context_file", str(tmp_path / "missing.json"))
+
+    assert isolated_wrapper.run_task_from_input() == ""
+    assert [r.exit_code for r in reported] == [1]
 
 
 # -- find_class_file -------------------------------------------------------

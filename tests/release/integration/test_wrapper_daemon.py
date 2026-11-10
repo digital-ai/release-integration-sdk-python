@@ -393,3 +393,71 @@ def test_executor_exits_when_its_first_input_cannot_be_read(daemon_wrapper, repo
 
     assert exited.value.code == 1
     start_watcher.assert_not_called()
+
+
+def test_input_with_unusable_routing_data_stays_unread_until_corrected(daemon_wrapper, reported_to, monkeypatch):
+    secret = StaticSecret("First")
+    monkeypatch.setattr(k8s, "get_client", lambda: secret)
+    daemon_wrapper.run_task_from_input()
+
+    # The next input has no callback URL yet: nothing can be routed, so it is not claimed.
+    secret.data = input_secret_data("Next")
+    url = secret.data.pop("url")
+    assert daemon_wrapper.run_task_from_input() is None
+
+    secret.data["url"] = url
+    assert daemon_wrapper.run_task_from_input() == secret.data["session-key"]
+
+    assert [r.output_properties.get("greeting") for _, r in reported_to] == ["Hello First", "Hello Next"]
+
+
+def test_abort_while_switching_to_the_next_task_is_reported_for_that_task(daemon_wrapper, reported_to, monkeypatch):
+    # A signal can interrupt the main thread between installing the new task's callback and
+    # resetting the report state; it must not look like an idle executor (exit 0, nothing reported).
+    def exit_process(code):
+        raise Exited(code)
+
+    monkeypatch.setattr(daemon_wrapper.os, "_exit", exit_process)
+    secret = StaticSecret("First")
+    first_callback = callback_of(secret)
+    monkeypatch.setattr(k8s, "get_client", lambda: secret)
+    daemon_wrapper.run_task_from_input()
+    secret.data = input_secret_data("Next")
+
+    real_start = daemon_wrapper._start_task_input
+
+    def abort_mid_handoff():
+        daemon_wrapper.abort_handler(signal.SIGABRT, None)  # the callback is switched, the report state not yet
+        real_start()
+
+    monkeypatch.setattr(daemon_wrapper, "_start_task_input", abort_mid_handoff)
+    with pytest.raises(Exited) as exited:
+        daemon_wrapper.run_task_from_input()
+
+    assert exited.value.args == (1,)
+    assert reported_to == [
+        (first_callback, OutputContext(0, "", {"greeting": "Hello First"}, [])),
+        (callback_of(secret), OutputContext(1, "Abort requested before the task started", {}, [])),
+    ]
+
+
+def test_file_input_announced_by_a_watch_event_runs_once(daemon_wrapper, reported, monkeypatch, tmp_path):
+    # Not a runner set-up (daemon mode uses a secret), but a file input must never look unread,
+    # or the watcher would run it again and again.
+    input_path = tmp_path / "input.json"
+    input_path.write_text(json.dumps(input_context("containerExamples.Hello", [task_property("yourName", "File")])))
+    monkeypatch.setattr(daemon_wrapper, "input_context_file", str(input_path))
+    stop = threading.Event()
+    calls = []
+
+    def run_once_then_stop():
+        calls.append(1)
+        if len(calls) > 1:
+            stop.set()  # a retry: stop instead of looping forever
+        return daemon_wrapper.run_task_from_input()
+
+    monkeypatch.setattr(watcher.watch, "Watch", lambda: OneWatch([modified("k1"), modified("k2")], stop))
+    watcher.start_input_context_watcher(run_once_then_stop, None, stop)
+
+    assert len(calls) == 1
+    assert greetings(reported) == ["Hello File"]

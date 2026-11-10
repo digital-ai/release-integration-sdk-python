@@ -9,6 +9,7 @@ import signal
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from typing import Any, Dict, Optional, Set, Tuple
 
 import requests
@@ -115,6 +116,12 @@ _exit_after_report = False
 # The worker thread running the current task, which abort_handler() waits on
 # for up to ABORT_GRACE_PERIOD_SECONDS.
 _worker: Optional[threading.Thread] = None
+
+# True while the wrapper switches to a new task's input (its callback and report
+# state, see _task_handoff()). A signal received meanwhile is kept in
+# _deferred_signal and handled right after the switch.
+_handoff_in_progress = False
+_deferred_signal: Optional[int] = None
 
 # How many times _snapshot_output_context() reads the output context when the
 # worker changes it during the read.
@@ -263,10 +270,16 @@ def abort_handler(signum, frame):
     daemon mode, the input-context watcher and the task it is running) can
     catch the exit and carry on, e.g. by running another task.
     """
-    global _abort_in_progress, _exit_after_report
+    global _abort_in_progress, _exit_after_report, _deferred_signal
     signal_name = signal.Signals(signum).name
 
     with _report_lock:
+        if _handoff_in_progress:
+            # Handled once the new task's callback and report state are both in
+            # place (see _task_handoff()), so the abort is reported for it.
+            dai_logger.info(f"Received {signal_name} while switching to a new task; handling it once switched")
+            _deferred_signal = signum
+            return
         if _abort_in_progress:
             dai_logger.info(f"Received {signal_name}, ignored: abort already in progress")
             return
@@ -345,7 +358,12 @@ def get_task_details() -> Tuple[Dict[str, Any], str, str]:
     and error streams, build the task properties from the InputContext object.
     """
     dai_logger.info("Preparing for task properties")
+    global base64_session_key, callback_url, _executed_session_key
     if input_context_file:
+        # A file has no session-key; "" still tells the daemon-mode watcher the
+        # input was taken (its result or failure is reported), so it is never
+        # retried as an unread secret would be.
+        _executed_session_key = ""
         _start_task_input()
         dai_logger.info("Reading input context from file")
         with open(input_context_file) as data_input:
@@ -354,18 +372,23 @@ def get_task_details() -> Tuple[Dict[str, Any], str, str]:
         k8s_client = k8s.get_client()
         dai_logger.info("Reading input context from secret")
         secret = k8s_client.read_namespaced_secret(input_context_secret, runner_namespace)
-        global base64_session_key, callback_url, _executed_session_key
-        # Recorded before anything can fail: a failure is reported for this
-        # input, so in daemon mode it counts as handled and is not run again.
-        _executed_session_key = secret.data.get("session-key")
+        # Decode the routing data first: if it is missing or malformed, nothing
+        # is recorded, no result can be routed, and in daemon mode the input
+        # stays unread, so it is tried again (or, if it is the first input, the
+        # executor exits and the runner fails the task).
+        session_key = secret.data.get("session-key")
+        new_session_key = base64.b64decode(secret.data["session-key"])
+        new_callback_url = base64.b64decode(secret.data["url"])
+        # From here on the input is read: a failure is reported for it, so in
+        # daemon mode it counts as handled and is not run again.
+        _executed_session_key = session_key
         # Raises _InputAlreadyHandled, before any state changes, if this
         # process already handled the input.
         _claim_input(_executed_session_key)
-        new_session_key = base64.b64decode(secret.data["session-key"])
-        new_callback_url = base64.b64decode(secret.data["url"])
-        base64_session_key, callback_url = new_session_key, new_callback_url
         # From here on, a failure or an abort is reported to this input's callback.
-        _start_task_input()
+        with _task_handoff():
+            base64_session_key, callback_url = new_session_key, new_callback_url
+            _start_task_input()
 
         input_content = secret.data["input"]
         if not input_content:
@@ -599,8 +622,9 @@ def run_task_from_input() -> Optional[str]:
     seen before), it is neither run nor reported again. A watch event can
     arrive after the input it announced was already run.
 
-    Returns the session-key of the input context secret that was read, or None
-    if no secret was read; in daemon mode the watcher then tries again.
+    Returns the session-key of the input context secret that was read, "" for
+    an input file, or None if no input could be read (in daemon mode the
+    watcher then tries again).
     """
     global _executed_session_key
     _executed_session_key = None
@@ -687,6 +711,30 @@ def _start_task_input() -> None:
     with _report_lock:
         dai_task_object = None
         _reset_report_guard()
+
+
+@contextmanager
+def _task_handoff():
+    """
+    Switches to a new task's input without a signal seeing a half-switched
+    state. Until the new callback and the reset report state are both in place,
+    an abort would treat the executor as idle and exit without reporting the
+    new task. Signal handlers run on this (main) thread between steps, which a
+    lock cannot prevent, so abort_handler() defers a signal received here and
+    it is handled as soon as the switch is done.
+    """
+    global _handoff_in_progress, _deferred_signal
+    with _report_lock:
+        _handoff_in_progress = True
+        _deferred_signal = None
+    try:
+        yield
+    finally:
+        with _report_lock:
+            _handoff_in_progress = False
+            signum, _deferred_signal = _deferred_signal, None
+        if signum is not None:
+            abort_handler(signum, None)
 
 
 if __name__ == "__main__":
