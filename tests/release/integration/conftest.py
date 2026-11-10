@@ -41,6 +41,10 @@ def isolated_wrapper(monkeypatch):
     # Also read from the environment; 0 would skip waiting for the worker. Tests may override it.
     monkeypatch.setattr(wrapper, "ABORT_GRACE_PERIOD_SECONDS", 3.0)
     monkeypatch.setattr(wrapper, "input_context", None)
+    monkeypatch.setattr(wrapper, "_executed_session_key", None)
+    monkeypatch.setattr(wrapper, "_handled_session_keys", set())
+    monkeypatch.setattr(wrapper, "_handoff_in_progress", False)
+    monkeypatch.setattr(wrapper, "_deferred_signal", None)
     monkeypatch.setattr(wrapper, "dai_task_object", None)
     monkeypatch.setattr(wrapper.masked_std_out, "secrets", [])
     monkeypatch.setattr(wrapper.masked_std_err, "secrets", [])

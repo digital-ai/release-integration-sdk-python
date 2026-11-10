@@ -95,19 +95,35 @@ def test_unreadable_input_is_reported_as_failed(isolated_wrapper, reported, monk
     assert "missing.json" in result.job_error_message
 
 
-@pytest.mark.parametrize("mode, watches", [("daemon", True), ("", False)], ids=["daemon", "single-run"])
-def test_daemon_mode_watches_for_the_next_input_after_running(isolated_wrapper, run_task, monkeypatch, mode,
-                                                              watches):
-    monkeypatch.setattr(isolated_wrapper, "execution_mode", mode)
+def test_single_run_mode_does_not_watch_for_more_input(isolated_wrapper, run_task, monkeypatch):
     start_watcher = mock.Mock()
     monkeypatch.setattr(isolated_wrapper.watcher, "start_input_context_watcher", start_watcher)
 
     run_task(hello_context())
 
-    if watches:
-        start_watcher.assert_called_once_with(isolated_wrapper.run)
-    else:
-        start_watcher.assert_not_called()
+    start_watcher.assert_not_called()
+
+
+def test_daemon_mode_watches_for_the_next_input_once_and_exits_when_watching_stops(isolated_wrapper, run_task,
+                                                                                  monkeypatch):
+    monkeypatch.setattr(isolated_wrapper, "execution_mode", "daemon")
+    start_watcher = mock.Mock()
+    monkeypatch.setattr(isolated_wrapper.watcher, "start_input_context_watcher", start_watcher)
+
+    with pytest.raises(SystemExit) as exited:
+        run_task(hello_context())
+
+    # Read from a file: no session-key, but "" (input read) rather than None (input not read).
+    start_watcher.assert_called_once_with(isolated_wrapper.run_task_from_input, "")
+    assert exited.value.code == 1
+
+
+def test_input_file_counts_as_read_even_if_it_cannot_be_opened(isolated_wrapper, reported, monkeypatch, tmp_path):
+    # Its failure is reported, so in daemon mode the watcher must not retry it as an unread input.
+    monkeypatch.setattr(isolated_wrapper, "input_context_file", str(tmp_path / "missing.json"))
+
+    assert isolated_wrapper.run_task_from_input() == ""
+    assert [r.exit_code for r in reported] == [1]
 
 
 # -- find_class_file -------------------------------------------------------

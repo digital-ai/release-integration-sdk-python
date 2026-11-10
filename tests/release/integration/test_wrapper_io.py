@@ -169,6 +169,24 @@ def test_task_details_from_secret_set_the_callback_url(on_kubernetes, monkeypatc
     assert base64.b64decode(on_kubernetes.callback_url).decode() == CALLBACK_URL
 
 
+@pytest.mark.parametrize("encrypted_input", [True, False], ids=["readable", "unreadable"])
+def test_task_details_from_secret_record_its_session_key_for_the_watcher(on_kubernetes, monkeypatch, session_key,
+                                                                         encrypted_input):
+    encrypted = AESJobDataEncryptor(session_key).encrypt(json.dumps(input_context()))
+    install_kube(monkeypatch, {INPUT_SECRET: {
+        "session-key": b64(session_key), "url": secret_url(CALLBACK_URL),
+        "input": b64(encrypted if encrypted_input else "not encrypted with this key"),
+    }})
+
+    try:
+        on_kubernetes.get_task_details()
+    except Exception:
+        assert not encrypted_input
+
+    # Recorded as stored in the secret, which is how the watcher sees it, even if the input is unreadable.
+    assert on_kubernetes._executed_session_key == b64(session_key)
+
+
 def test_task_details_from_secret_are_decrypted_with_its_session_key(on_kubernetes, monkeypatch, session_key):
     encrypted = AESJobDataEncryptor(session_key).encrypt(json.dumps(input_context()))
     install_kube(monkeypatch, {INPUT_SECRET: {
