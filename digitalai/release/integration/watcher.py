@@ -72,9 +72,17 @@ def start_input_context_watcher(on_input_context_update_func: Callable[[], Optio
 
     while not stop.is_set():
         try:
-            start_input_secret_watcher(on_input_context_update_func, stop, tracker)
-            # The stream ended cleanly (e.g. the server timed out the watch): re-open it.
-            delay = RECONNECT_DELAY_SECONDS
+            events = start_input_secret_watcher(on_input_context_update_func, stop, tracker)
+            if stop.is_set():
+                break
+            # The stream ended cleanly (e.g. the server timed out the watch): re-open it. A stream
+            # that delivered events was healthy, so start the backoff over; one that delivered
+            # none keeps backing off, so repeated empty responses cannot flood the API server.
+            if events:
+                delay = RECONNECT_DELAY_SECONDS
+            stop.wait(delay)
+            if not events:
+                delay = min(delay * 2, MAX_RECONNECT_DELAY_SECONDS)
         except Exception as e:
             if stop.is_set():
                 break
@@ -86,11 +94,11 @@ def start_input_context_watcher(on_input_context_update_func: Callable[[], Optio
 
 def start_input_secret_watcher(on_input_context_update_func: Callable[[], Optional[str]],
                                stop: threading.Event,
-                               tracker: Optional[SessionKeyTracker] = None) -> None:
+                               tracker: Optional[SessionKeyTracker] = None) -> int:
     """
     Opens one watch connection on the input-context secret and calls
     on_input_context_update_func for each new session key it sees, until the
-    connection ends or stop is set.
+    connection ends or stop is set. Returns the number of events received.
 
     Without a tracker, the first session key seen is only recorded, since the
     input it belongs to is assumed to have been run already.
@@ -103,9 +111,11 @@ def start_input_secret_watcher(on_input_context_update_func: Callable[[], Option
     record_first_key = tracker is None
     tracker = tracker or SessionKeyTracker()
 
+    events = 0
     w = watch.Watch()
     try:
         for event in w.stream(kubernetes_client.list_namespaced_secret, namespace, field_selector=field_selector):
+            events += 1
             # The runner deletes the secret when it evicts the executor; that is not new input.
             if event.get("type") != "DELETED":
                 secret = event['object']
@@ -128,3 +138,4 @@ def start_input_secret_watcher(on_input_context_update_func: Callable[[], Option
     finally:
         # Always release the underlying streaming connection.
         w.stop()
+    return events

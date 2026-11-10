@@ -3,12 +3,17 @@ wrapper.run(): locating and importing the task class, wiring the task context,
 and reporting setup failures. Runs in-process against the fixture tasks in
 tasks/, copied to a temporary runner directory (see ``importable_workspace``).
 """
+import base64
 import json
 import os
+import threading
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
 
+from digitalai.release.integration import k8s, watcher
+from digitalai.release.integration.job_data_encryptor import AESJobDataEncryptor
 from digitalai.release.integration.output_context import OutputContext
 from tests.support import RELEASE_ID, TASK_ID, input_context, task_property
 
@@ -131,6 +136,63 @@ def test_daemon_mode_runs_each_new_input_from_the_same_watcher(isolated_wrapper,
 
     start_watcher.assert_called_once()
     assert len(reported) == 4
+
+
+def b64(value) -> str:
+    return base64.b64encode(value if isinstance(value, bytes) else value.encode()).decode()
+
+
+def input_secret(name):
+    """An input-context secret holding hello_context() with the yourName input set to ``name``."""
+    session_key = b64(os.urandom(32))
+    context = input_context("containerExamples.Hello", [task_property("yourName", name)])
+    encrypted = AESJobDataEncryptor(session_key).encrypt(json.dumps(context))
+    return SimpleNamespace(data={
+        "session-key": b64(session_key), "url": b64(b64("http://release/callback")), "input": b64(encrypted),
+    })
+
+
+class OneWatchConnection:
+    """Replaces watch.Watch(): one connection that replays fixed events, then stops the loop."""
+
+    def __init__(self, events, stop):
+        self.events = events
+        self.stop_loop = stop
+
+    def stream(self, func, *args, **kwargs):
+        try:
+            yield from self.events
+        finally:
+            self.stop_loop.set()
+
+    def stop(self):
+        pass
+
+
+@pytest.mark.parametrize("announced", [["k2", "k3", "k4"], ["k2", "k2", "k3"]], ids=["k2-k3-k4", "k2-k2-k3"])
+def test_daemon_mode_does_not_rerun_input_announced_by_a_late_event(isolated_wrapper, importable_workspace,
+                                                                    reported, monkeypatch, announced):
+    # By the time the first event is handled, the secret already holds the newest input, so that
+    # input runs then. The events still buffered after it must not run it a second time.
+    secret = {"current": input_secret("First")}
+    kube = SimpleNamespace(read_namespaced_secret=lambda name, ns: secret["current"],
+                           list_namespaced_secret=mock.Mock())
+    monkeypatch.setattr(k8s, "get_client", lambda: kube)
+    for name, value in (("INPUT_CONTEXT_SECRET", "input-secret"), ("RUNNER_NAMESPACE", "runner-ns")):
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(isolated_wrapper, "input_context_secret", "input-secret")
+    monkeypatch.setattr(isolated_wrapper, "runner_namespace", "runner-ns")
+    monkeypatch.setattr(isolated_wrapper, "_post_callback", mock.Mock())
+
+    first_key = isolated_wrapper.run_once()
+    secret["current"] = input_secret("Newest")
+
+    stop = threading.Event()
+    events = [{"type": "MODIFIED", "object": SimpleNamespace(data={"session-key": k})} for k in announced]
+    monkeypatch.setattr(watcher, "watch", SimpleNamespace(Watch=lambda: OneWatchConnection(events, stop)))
+    watcher.start_input_context_watcher(isolated_wrapper.run_once, first_key, stop)
+
+    assert [r.output_properties["greeting"] for r in reported] == ["Hello First", "Hello Newest"]
 
 
 # -- find_class_file -------------------------------------------------------

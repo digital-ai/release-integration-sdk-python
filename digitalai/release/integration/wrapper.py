@@ -545,15 +545,24 @@ def run_once() -> Optional[str]:
     """
     Runs the task in the current input context and reports its result.
 
-    Returns the session key of the input that was run, when the input came from
-    the input-context secret, so the daemon-mode watcher does not run it again.
+    If the input-context secret still holds the input this process ran last
+    (same session key), it is not run or reported again: a watch event can
+    arrive after the input it announced was already run.
+
+    Returns the session key of the input that was read, when the input came
+    from the input-context secret, so the daemon-mode watcher does not run it
+    again.
     """
     global input_session_key
+    last_run_session_key = input_session_key
     input_session_key = None
     try:
         # Get task details, parse the script file to get the task class, import the module,
         # create an instance of the task class, and execute the task
         task_props, task_type, script_path = get_task_details()
+        if last_run_session_key and input_session_key == last_run_session_key:
+            dai_logger.info("Input context was already run, skipping it")
+            return input_session_key
         if "." not in task_type:
             raise ValueError(f"Invalid task type '{task_type}', expected format '<prefix>.<ClassName>'")
         task_class_name = task_type.split(".")[1]

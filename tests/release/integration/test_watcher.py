@@ -248,3 +248,31 @@ def test_loop_backs_off_between_failed_connections(kube_client, monkeypatch):
     watcher.start_input_context_watcher(mock.Mock(), "k1", stop)
 
     assert waits == [1, 2, 3]
+
+
+def test_loop_backs_off_when_the_watch_keeps_ending_without_events(kube_client, monkeypatch):
+    stop = threading.Event()
+    waits = []
+    monkeypatch.setattr(stop, "wait", waits.append)
+    monkeypatch.setattr(watcher, "watch", FakeConnections(stop, [], [], [], [], []))
+    monkeypatch.setattr(watcher, "RECONNECT_DELAY_SECONDS", 1)
+    monkeypatch.setattr(watcher, "MAX_RECONNECT_DELAY_SECONDS", 4)
+
+    watcher.start_input_context_watcher(mock.Mock(), "k1", stop)
+
+    assert waits == [1, 2, 4, 4]
+
+
+def test_loop_waits_before_reopening_a_watch_that_ended_cleanly(kube_client, monkeypatch):
+    stop = threading.Event()
+    waits = []
+    monkeypatch.setattr(stop, "wait", waits.append)
+    monkeypatch.setattr(watcher, "watch", FakeConnections(stop, [ConnectionLost], [ConnectionLost],
+                                                          [secret_event("k1")], [secret_event("k1")]))
+    monkeypatch.setattr(watcher, "RECONNECT_DELAY_SECONDS", 1)
+    monkeypatch.setattr(watcher, "MAX_RECONNECT_DELAY_SECONDS", 30)
+
+    watcher.start_input_context_watcher(mock.Mock(), "k1", stop)
+
+    # A stream that delivered events starts the backoff over.
+    assert waits == [1, 2, 1]
