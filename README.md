@@ -76,7 +76,7 @@ class ShowVersion(ApiBaseTask):
 
 ## Changelog
 
-### Unreleased
+### Version 27.1.0b1
 
 #### 🚀 Features
 
@@ -90,16 +90,4 @@ class ShowVersion(ApiBaseTask):
 - Aborted tasks no longer report exit code 0; `sys.exit(n)` now reports exit code `n`.
 - Tasks that don't call `super().__init__()` work again.
 - `setReleaseVariable()`, `setFolderVariable()` and `setGlobalVariable()` now accept a list for list variables.
-
-### Version 26.3.1
-
-#### 🚀 Features
-
-- Added the `ApiBaseTask` base class, exposing every Release v1 API as a lazily created, cached property.
-- `get_release_api_client()` now supports optional credentials/server URL and `requests` library arguments.
-- Added `get_phase_id()` and `get_folder_id()` helper methods to `BaseTask`.
-
-#### 🛠️ Enhancements
-
-- Improved stability and error handling for API requests and Kubernetes tasks.
 
