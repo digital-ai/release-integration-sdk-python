@@ -9,7 +9,7 @@ import signal
 import sys
 import threading
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Set, Tuple
 
 import requests
 
@@ -40,6 +40,16 @@ runner_namespace: str = os.getenv('RUNNER_NAMESPACE', '')
 execution_mode: str = os.getenv('EXECUTOR_EXECUTION_MODE', '')
 
 input_context: Optional[InputContext] = None
+
+# The session-key of the input most recently read from the input context
+# secret, as stored in the secret. In daemon mode the watcher uses it to tell
+# new input from input already run.
+_executed_session_key: Optional[str] = None
+
+# Every session-key whose input this process has run (or reported as failed),
+# so no input runs twice. The runner uses a new key per task, so this grows by
+# one per task the executor runs.
+_handled_session_keys: Set[str] = set()
 
 size_of_1Mb = 1024 * 1024
 
@@ -76,12 +86,18 @@ def get_encryptor():
 dai_task_object: Optional[BaseTask] = None
 
 # Report state for the current task execution. The output context is reported
-# exactly once, either by execute_task() after the worker finishes or by
-# abort_handler(). Both run on the main thread (Python runs signal handlers
-# there), so a signal can arrive while a report is in progress; the state lets
-# the handler leave that report to finish instead of exiting mid-push.
-# Reset at the start of each execute_task() call so daemon-mode iterations
-# each get a fresh state.
+# exactly once, either by execute_task() after the worker finishes, by
+# run_task_from_input() when the task cannot be loaded, or by abort_handler().
+# All run on the main thread (Python runs signal handlers there), so a signal
+# can arrive while a report is in progress; the state lets the handler leave
+# that report to finish instead of exiting mid-push.
+#
+# pending: a task's input is being loaded or its task is running.
+# done: its result was reported; in daemon mode the executor is idle until
+#       the next input, and an abort there has no task to abort.
+#
+# Reset to pending when each new input starts loading (_start_task_input())
+# and again by execute_task(), so daemon-mode iterations each get a fresh state.
 _REPORT_PENDING = "pending"
 _REPORT_IN_PROGRESS = "in_progress"
 _REPORT_DONE = "done"
@@ -188,11 +204,13 @@ def _exit_process(code: int) -> None:
 
 
 def _report_once(aborted: bool = False,
-                 no_task_message: str = "Task produced no output context") -> bool:
+                 no_task_message: str = "Task produced no output context",
+                 context: Optional[OutputContext] = None) -> bool:
     """
-    Reports the current dai_task_object's output context exactly once. The
-    first caller (execute_task() after the worker finishes, or abort_handler())
-    wins; later calls are no-ops.
+    Reports the current task's result exactly once: the given context, or else
+    the current dai_task_object's output context. The first caller
+    (execute_task() after the worker finishes, run_task_from_input() when the
+    task cannot be loaded, or abort_handler()) wins; later calls are no-ops.
 
     When aborted is True, the reported result never has exit code 0, even if
     the task's abort() override did not set one.
@@ -207,7 +225,8 @@ def _report_once(aborted: bool = False,
         _report_state = _REPORT_IN_PROGRESS
 
     try:
-        context = _snapshot_output_context(dai_task_object, no_task_message)
+        if context is None:
+            context = _snapshot_output_context(dai_task_object, no_task_message)
         if aborted and not context.exit_code:
             context.exit_code = 1
             context.job_error_message = context.job_error_message or "Abort requested"
@@ -234,10 +253,15 @@ def abort_handler(signum, frame):
     to finish and the process exits right after it. Signals received while an
     abort is already being handled are ignored.
 
+    If no task is running, because its result was already reported (in daemon
+    mode, an idle executor that the runner removes), the process exits with
+    status 0 without calling abort() or reporting anything: the finished task
+    is not aborted after the fact.
+
     os._exit() (rather than sys.exit()) is used deliberately: it bypasses all
-    Python finally/atexit machinery, which matters in daemon mode where run()'s
-    finally block would otherwise restart a blocking input-context watcher and
-    prevent the process from actually exiting.
+    Python finally/except machinery, so no code on the interrupted stack (in
+    daemon mode, the input-context watcher and the task it is running) can
+    catch the exit and carry on, e.g. by running another task.
     """
     global _abort_in_progress, _exit_after_report
     signal_name = signal.Signals(signum).name
@@ -251,6 +275,12 @@ def abort_handler(signum, frame):
             _exit_after_report = True
             return
         _abort_in_progress = True
+        idle = _report_state == _REPORT_DONE
+
+    if idle:
+        dai_logger.info(f"Received {signal_name} while no task is running; exiting")
+        _exit_process(0)
+        return
 
     dai_logger.info(f"Received {signal_name} to gracefully stop the process")
 
@@ -316,6 +346,7 @@ def get_task_details() -> Tuple[Dict[str, Any], str, str]:
     """
     dai_logger.info("Preparing for task properties")
     if input_context_file:
+        _start_task_input()
         dai_logger.info("Reading input context from file")
         with open(input_context_file) as data_input:
             input_content = data_input.read()
@@ -323,9 +354,18 @@ def get_task_details() -> Tuple[Dict[str, Any], str, str]:
         k8s_client = k8s.get_client()
         dai_logger.info("Reading input context from secret")
         secret = k8s_client.read_namespaced_secret(input_context_secret, runner_namespace)
-        global base64_session_key, callback_url
-        base64_session_key = base64.b64decode(secret.data["session-key"])
-        callback_url = base64.b64decode(secret.data["url"])
+        global base64_session_key, callback_url, _executed_session_key
+        # Recorded before anything can fail: a failure is reported for this
+        # input, so in daemon mode it counts as handled and is not run again.
+        _executed_session_key = secret.data.get("session-key")
+        # Raises _InputAlreadyHandled, before any state changes, if this
+        # process already handled the input.
+        _claim_input(_executed_session_key)
+        new_session_key = base64.b64decode(secret.data["session-key"])
+        new_callback_url = base64.b64decode(secret.data["url"])
+        base64_session_key, callback_url = new_session_key, new_callback_url
+        # From here on, a failure or an abort is reported to this input's callback.
+        _start_task_input()
 
         input_content = secret.data["input"]
         if not input_content:
@@ -525,6 +565,39 @@ def find_class_file(root_dir, class_name):
 
 
 def run():
+    """
+    Runs the task in the input context. In daemon mode, then keeps running the
+    next task each time the runner puts new input in the input context secret,
+    until the runner removes the executor pod. If the secret cannot be watched
+    at all, exits with status 1, so the runner replaces this executor.
+
+    A task that calls sys.exit() ends the process, in either mode, once its
+    result has been reported.
+    """
+    run_task_from_input()
+    if execution_mode == "daemon":
+        # A single watcher runs every later task; see watcher.py for why the
+        # watcher must not be started again from each task run.
+        watcher.start_input_context_watcher(run_task_from_input, _executed_session_key)
+        dai_logger.error("Stopped watching for new tasks; exiting so the runner replaces this executor")
+        sys.exit(1)
+
+
+def run_task_from_input() -> Optional[str]:
+    """
+    Reads the input context, runs its task and reports the result, or reports
+    a failure if the task cannot be loaded.
+
+    An input from the input context secret runs at most once in this process:
+    if the secret still holds an input already handled (its session-key was
+    seen before), it is neither run nor reported again. A watch event can
+    arrive after the input it announced was already run.
+
+    Returns the session-key of the input context secret that was read, or None
+    if no secret was read.
+    """
+    global _executed_session_key
+    _executed_session_key = None
     try:
         # Get task details, parse the script file to get the task class, import the module,
         # create an instance of the task class, and execute the task
@@ -567,13 +640,47 @@ def run():
         task_obj.release_context = input_context.release
         task_obj.task_id = input_context.task.id
         execute_task(task_obj)
+    except _InputAlreadyHandled:
+        dai_logger.info("The input context in the secret was already run; not running it again")
     except Exception as e:
-        # Log the error and update the output context file with exit code 1 if an exception is raised
+        # Log the error and report the failure with exit code 1, unless a result
+        # was already reported for this input or no new input was read (in
+        # daemon mode, that would report to the previous task's callback).
         dai_logger.error("Unexpected error occurred.", exc_info=True)
-        update_output_context(OutputContext(1, str(e), {}, []))
-    finally:
-        if execution_mode == "daemon":
-            watcher.start_input_context_watcher(run)
+        if not _report_once(context=OutputContext(1, str(e), {}, [])):
+            dai_logger.warning("The error was not reported: no new task input was read, "
+                               "or its result was already reported")
+    return _executed_session_key
+
+
+class _InputAlreadyHandled(Exception):
+    """The input context secret holds an input this process already handled."""
+
+
+def _claim_input(session_key: Optional[str]) -> None:
+    """
+    Records the input with this session-key as handled by this process, or
+    raises _InputAlreadyHandled if it already was.
+    """
+    if not session_key:
+        return
+    if session_key in _handled_session_keys:
+        raise _InputAlreadyHandled()
+    _handled_session_keys.add(session_key)
+
+
+def _start_task_input() -> None:
+    """
+    Marks the start of a new task: its input is being loaded. Until its task
+    object exists, an abort reports "Abort requested before the task started"
+    for this input (not the previous task's), and a load failure is reported
+    once. The previous task, already reported, is dropped so an abort never
+    runs its abort() hook.
+    """
+    global dai_task_object
+    with _report_lock:
+        dai_task_object = None
+        _reset_report_guard()
 
 
 if __name__ == "__main__":

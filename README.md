@@ -89,5 +89,7 @@ class ShowVersion(ApiBaseTask):
 - The task result is no longer cut off if an abort signal arrives while it is being reported.
 - Aborted tasks no longer report exit code 0; `sys.exit(n)` now reports exit code `n`.
 - Tasks that don't call `super().__init__()` work again.
+- A reused executor pod no longer runs its last task again when it is shut down after being idle. Each task now runs only once.
+- Shutting down an idle executor no longer calls `abort()` on the task that already finished.
 - `setReleaseVariable()`, `setFolderVariable()` and `setGlobalVariable()` now accept a list for list variables.
 

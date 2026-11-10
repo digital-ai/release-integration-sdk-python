@@ -78,16 +78,22 @@ def test_abort_before_a_task_exists_reports_a_clear_message(isolated_wrapper, re
     assert exit_codes == [1]
 
 
-def test_abort_after_the_result_was_reported_does_not_report_again(isolated_wrapper, reported, exit_codes):
+@pytest.mark.parametrize("signum", [signal.SIGABRT, signal.SIGTERM], ids=["SIGABRT", "SIGTERM"])
+def test_signal_after_the_result_was_reported_exits_without_aborting_the_finished_task(isolated_wrapper, reported,
+                                                                                       exit_codes, dai_log, signum):
+    # In daemon mode, the runner removes an idle executor with SIGTERM: the task it ran last is finished
+    # and reported, so its abort() hook must not run and nothing is reported again.
     task = CountingAbortTask()
     isolated_wrapper.dai_task_object = task
     assert isolated_wrapper._report_once()
 
-    isolated_wrapper.abort_handler(signal.SIGABRT, None)
+    isolated_wrapper.abort_handler(signum, None)
 
-    assert task.abort_calls == 1
+    assert task.abort_calls == 0
+    assert not task.is_abort_requested()
     assert reported == [OutputContext(0, "", {}, [])]
-    assert exit_codes == [1]
+    assert exit_codes == [0]
+    assert f"Received {signal.Signals(signum).name} while no task is running; exiting" in dai_log.messages
 
 
 def test_cooperative_task_is_reported_with_what_it_recorded_while_stopping(isolated_wrapper, reported, exit_codes):

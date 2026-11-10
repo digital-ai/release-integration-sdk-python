@@ -95,19 +95,27 @@ def test_unreadable_input_is_reported_as_failed(isolated_wrapper, reported, monk
     assert "missing.json" in result.job_error_message
 
 
-@pytest.mark.parametrize("mode, watches", [("daemon", True), ("", False)], ids=["daemon", "single-run"])
-def test_daemon_mode_watches_for_the_next_input_after_running(isolated_wrapper, run_task, monkeypatch, mode,
-                                                              watches):
-    monkeypatch.setattr(isolated_wrapper, "execution_mode", mode)
+def test_single_run_mode_does_not_watch_for_more_input(isolated_wrapper, run_task, monkeypatch):
     start_watcher = mock.Mock()
     monkeypatch.setattr(isolated_wrapper.watcher, "start_input_context_watcher", start_watcher)
 
     run_task(hello_context())
 
-    if watches:
-        start_watcher.assert_called_once_with(isolated_wrapper.run)
-    else:
-        start_watcher.assert_not_called()
+    start_watcher.assert_not_called()
+
+
+def test_daemon_mode_watches_for_the_next_input_once_and_exits_when_watching_stops(isolated_wrapper, run_task,
+                                                                                  monkeypatch):
+    monkeypatch.setattr(isolated_wrapper, "execution_mode", "daemon")
+    start_watcher = mock.Mock()
+    monkeypatch.setattr(isolated_wrapper.watcher, "start_input_context_watcher", start_watcher)
+
+    with pytest.raises(SystemExit) as exited:
+        run_task(hello_context())
+
+    # Read from a file, so no session-key was executed.
+    start_watcher.assert_called_once_with(isolated_wrapper.run_task_from_input, None)
+    assert exited.value.code == 1
 
 
 # -- find_class_file -------------------------------------------------------
