@@ -11,6 +11,16 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # The suite takes under a minute; a hung test fails the job instead of running for hours.
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # Lowest supported version, and the version the plugin images run.
+        python-version: ["3.10", "3.12"]
+    env:
+      # Makes uv sync and uv run use the matrix version.
+      UV_PYTHON: ${{ matrix.python-version }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -19,8 +29,9 @@ jobs:
       with:
         enable-cache: true
     - name: Set up Python
-      run: uv python install 3.10
+      run: uv python install ${{ matrix.python-version }}
     - name: Install dependencies
       run: uv sync --frozen --extra dev
     - name: Run tests
-      run: uv run --project ${{ github.workspace }} python -m pytest tests -v
+      # faulthandler_timeout prints every thread's stack if a test runs longer than 120 s.
+      run: uv run --project ${{ github.workspace }} python -m pytest tests -v -o faulthandler_timeout=120

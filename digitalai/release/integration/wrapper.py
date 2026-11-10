@@ -725,8 +725,10 @@ def _task_handoff():
     """
     global _handoff_in_progress, _deferred_signal
     with _report_lock:
-        _handoff_in_progress = True
+        # Clear first: once the flag is set, abort_handler() may record a
+        # signal here at any moment, and it must not be overwritten.
         _deferred_signal = None
+        _handoff_in_progress = True
     try:
         yield
     finally:

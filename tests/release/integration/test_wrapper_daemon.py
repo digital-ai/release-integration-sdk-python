@@ -10,6 +10,7 @@ import base64
 import json
 import os
 import signal
+import sys
 import threading
 from types import SimpleNamespace
 from unittest import mock
@@ -441,12 +442,55 @@ def test_abort_while_switching_to_the_next_task_is_reported_for_that_task(daemon
     ]
 
 
+def test_abort_right_after_the_handoff_begins_is_not_lost(daemon_wrapper, reported_to, monkeypatch):
+    # A real signal handler can run between any two statements. Fire it at the first line that runs
+    # once _task_handoff() has set its flag: the deferred signal must survive the rest of the set-up.
+    def exit_process(code):
+        raise Exited(code)
+
+    monkeypatch.setattr(daemon_wrapper.os, "_exit", exit_process)
+    secret = StaticSecret("First")
+    monkeypatch.setattr(k8s, "get_client", lambda: secret)
+    daemon_wrapper.run_task_from_input()
+    secret.data = input_secret_data("Next")
+
+    handoff_code = daemon_wrapper._task_handoff.__wrapped__.__code__
+    fired = []
+
+    def trace_calls(frame, event, arg):
+        if frame.f_code is not handoff_code:
+            return None
+
+        def trace_lines(frame, event, arg):
+            if event == "line" and daemon_wrapper._handoff_in_progress and not fired:
+                fired.append(frame.f_lineno)
+                daemon_wrapper.abort_handler(signal.SIGABRT, None)
+            return trace_lines
+
+        return trace_lines
+
+    previous = sys.gettrace()
+    sys.settrace(trace_calls)
+    try:
+        with pytest.raises(Exited) as exited:
+            daemon_wrapper.run_task_from_input()
+    finally:
+        sys.settrace(previous)
+
+    assert fired, "the signal was never injected"
+    assert exited.value.args == (1,)
+    assert reported_to[1:] == [
+        (callback_of(secret), OutputContext(1, "Abort requested before the task started", {}, []))]
+
+
 def test_file_input_announced_by_a_watch_event_runs_once(daemon_wrapper, reported, monkeypatch, tmp_path):
     # Not a runner set-up (daemon mode uses a secret), but a file input must never look unread,
     # or the watcher would run it again and again.
     input_path = tmp_path / "input.json"
     input_path.write_text(json.dumps(input_context("containerExamples.Hello", [task_property("yourName", "File")])))
     monkeypatch.setattr(daemon_wrapper, "input_context_file", str(input_path))
+    # The watch is faked below; without a client the watcher would retry forever where no kubeconfig exists (CI).
+    monkeypatch.setattr(k8s, "get_client", lambda: SimpleNamespace(list_namespaced_secret=object()))
     stop = threading.Event()
     calls = []
 
