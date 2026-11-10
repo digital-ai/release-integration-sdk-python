@@ -115,6 +115,13 @@ For long-running tasks, prefer polling [`is_abort_requested`](#is_abort_requeste
 from within `execute` to stop cooperatively and promptly, rather than relying
 solely on `abort` being called.
 
+When the SDK calls `abort` on a signal, it runs on the main thread while `execute`
+may still be running on the worker thread, so an override must be thread-safe.
+Output properties and reporting records set in an override are sent with the
+aborted result; set them before calling `super().abort()`, since it raises. The
+aborted result is always reported with a non-zero exit code, even if an override
+does not set one.
+
 _No parameters._
 
 **Returns:** _None._
@@ -136,6 +143,15 @@ class MyTask(BaseTask):
         while not self.is_abort_requested():
             do_one_unit_of_work()
 ```
+
+After an abort is requested, the SDK waits up to `ABORT_GRACE_PERIOD_SECONDS`
+(environment variable, default `3`) for `execute` to return, then reports the
+aborted result and exits. Output properties and reporting records the task sets
+before it returns within that time are included in the result. Keep the grace
+period below the task type's `abortTimeout`, after which the runner force-kills
+the container. `abortTimeout` is a hidden property of `xlrelease.ContainerTask`
+that defaults to 30 seconds; the runner falls back to 10 seconds if it is set
+to `0`.
 
 _No parameters._
 

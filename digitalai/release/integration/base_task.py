@@ -58,6 +58,12 @@ class BaseTask(ABC):
         immediately. When called from the SDK's signal handler (outside of
         execute_task()), the caller is responsible for catching this exception
         and performing its own cleanup/exit.
+
+        The SDK's signal handler runs abort() on the main thread while execute()
+        may still be running on the worker thread, so an override must be
+        thread-safe. Output properties and reporting records set in an override
+        are sent with the aborted result; set them before calling super().abort(),
+        since it raises.
         """
         self.set_exit_code(1)
         self.set_error_message("Abort requested")
@@ -69,26 +75,38 @@ class BaseTask(ABC):
         (e.g. the process received SIGABRT/SIGTERM). Tasks may poll this from
         within execute() to cooperatively stop long-running work promptly.
         """
-        return self._abort_event.is_set()
+        abort_event = getattr(self, "_abort_event", None)
+        return abort_event is not None and abort_event.is_set()
 
     def _request_abort(self) -> None:
         """
         Internal SDK hook: signals is_abort_requested() to start returning True.
         Not intended to be called by task authors.
         """
+        if getattr(self, "_abort_event", None) is None:
+            self._abort_event = threading.Event()
         self._abort_event.set()
+
+    def _ensure_output_context(self) -> None:
+        """
+        Creates the output context if it is missing, for subclasses whose
+        __init__ does not call super().__init__().
+        """
+        if getattr(self, "output_context", None) is None:
+            self.output_context = OutputContext(0, "", {}, [])
 
     def get_output_context(self) -> OutputContext:
         """
         Returns the OutputContext object associated with the task.
         """
+        self._ensure_output_context()
         return self.output_context
 
     def get_output_properties(self) -> Dict[str, Any]:
         """
         Returns the output properties dictionary of the task's OutputContext object.
         """
-        return self.output_context.output_properties
+        return self.get_output_context().output_properties
 
     def get_input_properties(self) -> Dict[str, Any]:
         """
@@ -112,19 +130,19 @@ class BaseTask(ABC):
                 f"Invalid data type for value '{value}' in name '{name}' in set_output_property. Accepted data types "
                 f"are: str, int, list, dict, bool")
 
-        self.output_context.output_properties[name] = value
+        self.get_output_context().output_properties[name] = value
 
     def set_exit_code(self, value) -> None:
         """
         Sets the exit code of the task's OutputContext object.
         """
-        self.output_context.exit_code = value
+        self.get_output_context().exit_code = value
 
     def set_error_message(self, value) -> None:
         """
         Sets the error message of the task's OutputContext object.
         """
-        self.output_context.job_error_message = value
+        self.get_output_context().job_error_message = value
 
     def add_comment(self, comment: str) -> None:
         """
@@ -142,7 +160,7 @@ class BaseTask(ABC):
         """
         Adds a reporting record to the OutputContext
         """
-        self.output_context.reporting_records.append(reporting_record)
+        self.get_output_context().reporting_records.append(reporting_record)
 
     def get_release_server_url(self) -> str:
         """
